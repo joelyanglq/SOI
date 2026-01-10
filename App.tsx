@@ -469,10 +469,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6">
-             <h3 className="text-[10px] font-black uppercase text-slate-500 mb-4 tracking-widest flex items-center justify-between">
-               <span>我的装备状态</span>
-               <span className="text-[8px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">耐久监测</span>
-             </h3>
              <div className="space-y-4">
                 {game.inventory.length > 0 ? game.inventory.map(item => {
                   const percent = (item.lifespan / item.maxLifespan) * 100;
