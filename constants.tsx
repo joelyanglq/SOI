@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Equipment, Coach, RandomEvent, Sponsorship } from './types';
+import { Equipment, Coach, RandomEvent, Sponsorship, TrainingTaskDefinition } from './types';
 
 export const MATCH_STAMINA_COST = 20;
 export const TRAIN_MAX_GAIN = 2.0;
@@ -12,6 +12,15 @@ export const P_AGE_START = 6;
 export const FATIGUE_SLOPE = 0.04;
 export const FATIGUE_CAP = 0.85;
 export const PCS_MIN = 0.15;
+
+export const TRAINING_TASKS: Record<string, TrainingTaskDefinition> = {
+  jump: { id: 'jump', name: '四周跳', color: 'bg-blue-600', tec: 0.8, art: 0, staCost: 15, desc: "高收益高消耗" },
+  spin: { id: 'spin', name: '联合旋转', color: 'bg-indigo-500', tec: 0.4, art: 0.1, staCost: 8, desc: "均衡训练" },
+  step: { id: 'step', name: '接续步', color: 'bg-cyan-500', tec: 0.2, art: 0.4, staCost: 10, desc: "艺术侧重" },
+  art: { id: 'art', name: '表演力', color: 'bg-purple-500', tec: 0, art: 0.7, staCost: 8, desc: "纯艺术表现" },
+  physical: { id: 'physical', name: '陆地体能', color: 'bg-emerald-600', tec: 0.1, art: 0, staCost: -4, desc: "少量恢复" },
+  rest: { id: 'rest', name: '彻底休息', color: 'bg-slate-700', tec: 0, art: 0, staCost: -22, desc: "大量恢复" }
+};
 
 export const LOADING_QUOTES = [
   "正在打磨冰刀，极致的锋利是稳定的基础。",

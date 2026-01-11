@@ -93,6 +93,18 @@ export interface RandomEvent {
   type: 'positive' | 'negative' | 'neutral';
 }
 
+export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'art' | 'physical' | 'rest';
+
+export interface TrainingTaskDefinition {
+  id: TrainingTaskType;
+  name: string;
+  color: string;
+  tec: number;
+  art: number;
+  staCost: number; // positive = cost, negative = gain
+  desc: string;
+}
+
 export interface GameState {
   year: number;
   month: number;
@@ -101,7 +113,7 @@ export interface GameState {
   injuryMonths: number;
   hasCompeted: boolean;
   skater: Skater;
-  plan: { tec: number; art: number; rest: number };
+  schedule: TrainingTaskType[]; // Replaces old plan
   aiSkaters: Skater[];
   inventory: Equipment[];
   activeCoachId: string | null;

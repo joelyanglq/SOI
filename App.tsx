@@ -1,12 +1,12 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { 
-  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord 
+  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType 
 } from './types';
 import { 
   SURNAME, GIVEN, COACHES, CITIES, RANDOM_EVENTS, EQUIP_NAMES, CHOREO_NAMES,
-  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES 
+  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS
 } from './constants';
 
 const randNormal = (mean = 0, sd = 1) => {
@@ -120,14 +120,21 @@ const INITIAL_SKATER: Skater = {
   activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
 };
 
+const DEFAULT_SCHEDULE: TrainingTaskType[] = ['rest', 'rest', 'rest', 'rest', 'rest', 'rest', 'rest'];
+
 const App: React.FC = () => {
   const [game, setGame] = useState<GameState>(() => {
     const saved = localStorage.getItem('FS_MANAGER_V11_PRO');
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Migration: Ensure schedule exists if coming from old save
+      if (!parsed.schedule) parsed.schedule = [...DEFAULT_SCHEDULE];
+      return parsed;
+    }
     return {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, rolling: calculateRolling(INITIAL_SKATER) },
-      plan: { tec: 2, art: 1, rest: 1 },
+      schedule: [...DEFAULT_SCHEDULE],
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -146,6 +153,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'event' | 'development' | 'ranking' | 'career'>('event');
   const [devSubTab, setDevSubTab] = useState<'train' | 'coach' | 'equip' | 'choreo'>('train');
   const [careerSubTab, setCareerSubTab] = useState<'profile' | 'honors' | 'stats'>('profile');
+  const [draggedTask, setDraggedTask] = useState<TrainingTaskType | null>(null);
 
   const addLog = useCallback((msg: string, type: LogType = 'sys') => {
     setLogs(prev => [{ id: Math.random().toString(), msg, type, month: game.month }, ...prev].slice(0, 50));
@@ -175,7 +183,7 @@ const App: React.FC = () => {
     const resetState: GameState = {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, rolling: calculateRolling(INITIAL_SKATER) },
-      plan: { tec: 2, art: 1, rest: 1 },
+      schedule: [...DEFAULT_SCHEDULE],
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -216,6 +224,31 @@ const App: React.FC = () => {
 
   useEffect(() => { localStorage.setItem('FS_MANAGER_V11_PRO', JSON.stringify(game)); }, [game]);
 
+  const calculateWeeklyStats = useCallback((currentSchedule: TrainingTaskType[], startSta: number, currentCoach: Coach, skaterAge: number) => {
+    let tempSta = startSta;
+    let tecGain = 0;
+    let artGain = 0;
+    let artPlanPoints = 0; // For program freshness calculation
+
+    const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
+
+    for (const taskId of currentSchedule) {
+      const task = TRAINING_TASKS[taskId];
+      
+      let efficiency = 1.0;
+      if (tempSta <= 0) efficiency = 0;
+      else if (tempSta < 20) efficiency = 0.3;
+
+      tecGain += task.tec * currentCoach.tecMod * ageMod * efficiency;
+      artGain += task.art * currentCoach.artMod * ageMod * efficiency;
+      
+      if (task.art > 0) artPlanPoints += task.art; // Approximate art intensity for freshness
+
+      tempSta = clamp(tempSta - task.staCost, 0, 100);
+    }
+    return { finalSta: tempSta, tecGain, artGain, artPlanPoints };
+  }, []);
+
   const nextMonth = async () => {
     if (isNaming || isProcessing) return;
     setIsProcessing(true);
@@ -223,16 +256,17 @@ const App: React.FC = () => {
     await new Promise(r => setTimeout(r, 1200));
 
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    const ageMod = game.skater.age < 18 ? 1.3 : (game.skater.age <= 23 ? 1.0 : 0.6);
     
     setGame(prev => {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
       
-      const trainingEfficiency = prev.skater.sta <= 0 ? 0 : (prev.skater.sta < 20 ? 0.3 : 1.0);
-      
-      const tecGain = clamp(randNormal(prev.plan.tec * currentCoach.tecMod * ageMod * 0.45 * trainingEfficiency, 0.1), 0, 1.5);
-      const artGain = clamp(randNormal(prev.plan.art * currentCoach.artMod * ageMod * 0.45 * trainingEfficiency, 0.1), 0, 1.5);
+      // Calculate growth based on schedule
+      const { finalSta, tecGain: rawTec, artGain: rawArt, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age);
+
+      // Apply some randomness to the result
+      const tecGain = clamp(randNormal(rawTec, 0.1), 0, 3.0);
+      const artGain = clamp(randNormal(rawArt, 0.1), 0, 3.0);
 
       const updatedInventory = prev.inventory.map(item => ({ ...item, lifespan: item.lifespan - 1 }));
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
@@ -240,11 +274,12 @@ const App: React.FC = () => {
       let updatedSkater = { ...prev.skater, 
         tec: clamp(prev.skater.tec + tecGain, 0, 100), 
         art: clamp(prev.skater.art + artGain, 0, 100),
-        sta: clamp(prev.skater.sta - (prev.plan.tec + prev.plan.art) * 10 + prev.plan.rest * 22, 0, 100),
+        sta: finalSta,
         age: prev.skater.age + 0.083,
         activeProgram: { 
           ...prev.skater.activeProgram, 
-          freshness: clamp(prev.skater.activeProgram.freshness + (prev.plan.art * 2.8) - 5.0, 0, 100) 
+          // Adjust freshness based on intensity of art training roughly
+          freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100) 
         }
       };
 
@@ -334,8 +369,8 @@ const App: React.FC = () => {
 
       const updatedMarket = (nm % 4 === 0) ? generateMarket(prev.activeCoachId, prev.market) : prev.market;
 
-      if (trainingEfficiency === 0 && (prev.plan.tec > 0 || prev.plan.art > 0)) {
-        setTimeout(() => addLog("由于过度疲劳，本月训练颗粒无收！请增加休息计划。", 'event'), 300);
+      if (finalSta < 10) {
+        setTimeout(() => addLog("由于过度疲劳，部分训练效果严重受损！请务必安排休息。", 'event'), 300);
       }
 
       return { 
@@ -367,7 +402,10 @@ const App: React.FC = () => {
 
   const [showMatch, setShowMatch] = useState<{ event: GameEvent, idx: number } | null>(null);
 
-  const predictedSta = clamp(game.skater.sta - (game.plan.tec + game.plan.art) * 10 + game.plan.rest * 22, 0, 100);
+  const statsPreview = useMemo(() => {
+    const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age);
+  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats]);
 
   if (isNaming) {
     return (
@@ -409,9 +447,9 @@ const App: React.FC = () => {
           <button 
             onClick={nextMonth} 
             disabled={isProcessing}
-            className={`bg-blue-600 hover:bg-blue-500 text-white font-black py-4 px-10 rounded-2xl transition-all shadow-xl flex items-center gap-3 active:scale-95 ${game.skater.sta < 10 && game.plan.rest === 0 ? 'bg-red-600 hover:bg-red-500 ring-2 ring-red-500/50' : ''}`}
+            className={`bg-blue-600 hover:bg-blue-500 text-white font-black py-4 px-10 rounded-2xl transition-all shadow-xl flex items-center gap-3 active:scale-95 ${game.skater.sta < 10 && statsPreview.finalSta < 10 ? 'bg-red-600 hover:bg-red-500 ring-2 ring-red-500/50' : ''}`}
           >
-            {game.skater.sta < 10 && game.plan.rest === 0 ? '体力告急!' : '下个月'}
+            {game.skater.sta < 10 && statsPreview.finalSta < 10 ? '体力告急!' : '下个月'}
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
           </button>
         </div>
@@ -469,10 +507,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6">
-             <h3 className="text-[10px] font-black uppercase text-slate-500 mb-4 tracking-widest flex items-center justify-between">
-               <span>我的装备状态</span>
-               <span className="text-[8px] bg-slate-800 px-2 py-0.5 rounded text-slate-400">耐久监测</span>
-             </h3>
              <div className="space-y-4">
                 {game.inventory.length > 0 ? game.inventory.map(item => {
                   const percent = (item.lifespan / item.maxLifespan) * 100;
@@ -522,30 +556,76 @@ const App: React.FC = () => {
                 ))}</div>
                 {devSubTab === 'train' && (
                   <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
-                    <h3 className="text-sm font-black uppercase text-slate-400 mb-4 tracking-widest flex items-center gap-3">训练配置 <div className="flex-1 h-px bg-slate-800"></div></h3>
+                    <h3 className="text-sm font-black uppercase text-slate-400 mb-6 tracking-widest flex items-center gap-3">月度排程 (7天) <div className="flex-1 h-px bg-slate-800"></div></h3>
+                    
                     <div className="mb-8 p-4 bg-slate-950/50 rounded-2xl border border-slate-800 flex justify-between items-center">
                         <div>
                             <p className="text-[10px] font-black text-slate-500 uppercase">预计下月体力</p>
-                            <p className={`text-xl font-mono font-black ${predictedSta < 20 ? 'text-red-500' : 'text-emerald-400'}`}>{predictedSta.toFixed(0)}%</p>
+                            <p className={`text-xl font-mono font-black ${statsPreview.finalSta < 20 ? 'text-red-500' : 'text-emerald-400'}`}>{statsPreview.finalSta.toFixed(0)}%</p>
                         </div>
-                        {predictedSta < 10 && (
-                            <div className="text-right">
-                                <span className="text-[8px] font-black bg-red-600 text-white px-2 py-0.5 rounded uppercase animate-pulse">训练效率受损</span>
-                                <p className="text-[8px] text-slate-600 max-w-[120px] mt-1 leading-tight">由于极端疲劳，下月可能无法获得任何成长收益。</p>
-                            </div>
-                        )}
+                        <div className="text-right">
+                             <p className="text-[10px] font-black text-slate-500 uppercase">预计收益</p>
+                             <div className="flex gap-3">
+                                <span className="text-xs font-black text-blue-400">TEC +{statsPreview.tecGain.toFixed(2)}</span>
+                                <span className="text-xs font-black text-purple-400">ART +{statsPreview.artGain.toFixed(2)}</span>
+                             </div>
+                        </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-8">
-                      {Object.entries({ tec: "技术动作", art: "艺术表现", rest: "身体机能" }).map(([k, l]) => (
-                        <div key={k} className="bg-slate-950 p-8 rounded-[2rem] border border-slate-800 text-center shadow-inner group transition-all">
-                          <p className="text-xs font-bold text-slate-500 mb-4 uppercase tracking-widest">{l}</p>
-                          <div className="flex items-center justify-between">
-                            <button onClick={() => setGame(prev => ({ ...prev, plan: { ...prev.plan, [k]: Math.max(0, (prev.plan as any)[k] - 1) } }))} className="w-12 h-12 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-black text-xl transition-all active:scale-90">-</button>
-                            <span className="text-4xl font-black text-blue-500 font-mono">{(game.plan as any)[k]}</span>
-                            <button onClick={() => { if (Object.values(game.plan).reduce((a, b) => (a as number) + (b as number), 0) < 4) setGame(prev => ({ ...prev, plan: { ...prev.plan, [k]: (prev.plan as any)[k] + 1 } })); }} className="w-12 h-12 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-black text-xl transition-all active:scale-90">+</button>
-                          </div>
-                        </div>
-                      ))}
+
+                    <div className="grid grid-cols-7 gap-2 mb-8 p-2 bg-slate-950 rounded-2xl border border-slate-800 min-h-[80px]">
+                         {game.schedule.map((taskId, idx) => {
+                             const taskDef = TRAINING_TASKS[taskId];
+                             return (
+                                 <div 
+                                    key={idx}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        if (draggedTask) {
+                                            const newSchedule = [...game.schedule];
+                                            newSchedule[idx] = draggedTask;
+                                            setGame(prev => ({ ...prev, schedule: newSchedule }));
+                                        }
+                                    }}
+                                    onClick={() => {
+                                        // Simple cycle or removal if clicked without drag? 
+                                        // Better UX: if dragging is hard, clicking a slot sets it to 'rest' or cycles?
+                                        // Let's just make clicking remove it (set to rest)
+                                        const newSchedule = [...game.schedule];
+                                        newSchedule[idx] = 'rest';
+                                        setGame(prev => ({ ...prev, schedule: newSchedule }));
+                                    }}
+                                    className={`relative group rounded-xl flex items-center justify-center cursor-pointer transition-all hover:scale-105 active:scale-95 ${taskDef.color} shadow-lg`}
+                                 >
+                                    <span className="text-[10px] font-black text-white text-center leading-tight p-1">{taskDef.name}</span>
+                                    <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 rounded-xl transition-colors"></div>
+                                 </div>
+                             );
+                         })}
+                    </div>
+
+                    <h4 className="text-[10px] font-black uppercase text-slate-500 mb-4 tracking-widest">训练项目 (拖拽至上方槽位)</h4>
+                    <div className="grid grid-cols-3 gap-4">
+                        {Object.values(TRAINING_TASKS).map(task => (
+                            <div 
+                                key={task.id}
+                                draggable
+                                onDragStart={() => setDraggedTask(task.id)}
+                                onDragEnd={() => setDraggedTask(null)}
+                                className="bg-slate-950 p-4 rounded-2xl border border-slate-800 cursor-grab active:cursor-grabbing hover:border-slate-600 transition-all group"
+                            >
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className={`w-3 h-3 rounded-full ${task.color}`}></div>
+                                    <span className="text-xs font-bold text-white">{task.name}</span>
+                                </div>
+                                <p className="text-[8px] text-slate-500 mb-2 h-6 overflow-hidden leading-tight">{task.desc}</p>
+                                <div className="flex gap-2 text-[8px] font-mono font-black">
+                                    {task.tec > 0 && <span className="text-blue-500">TEC+{task.tec}</span>}
+                                    {task.art > 0 && <span className="text-purple-500">ART+{task.art}</span>}
+                                    <span className={task.staCost > 0 ? 'text-red-500' : 'text-emerald-500'}>STA{task.staCost > 0 ? '-' : '+'}{Math.abs(task.staCost)}</span>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                   </div>
                 )}
