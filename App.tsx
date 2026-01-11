@@ -28,7 +28,7 @@ const calculateRolling = (s: { pointsCurrent: number, pointsLast: number }) => {
 
 const calcDerivedStats = (attrs: PlayerAttributes) => {
   const tec = (attrs.jump * 0.5) + (attrs.spin * 0.3) + (attrs.step * 0.2);
-  const art = (attrs.aura * 0.6) + (attrs.step * 0.4);
+  const art = (attrs.perf * 0.6) + (attrs.step * 0.4);
   return { tec: clamp(tec), art: clamp(art) };
 };
 
@@ -124,7 +124,7 @@ const generateMarket = (activeCoachId: string | null = null, currentMarket: any 
 
 const INITIAL_SKATER: Skater = {
   id: 'player_1', name: "未命名选手", age: 14.1, tec: 40.0, art: 35.0, sta: 100.0,
-  attributes: { jump: 40, spin: 40, step: 40, aura: 30, endurance: 30 },
+  attributes: { jump: 40, spin: 40, step: 40, perf: 30, endurance: 30 },
   pointsCurrent: 0, pointsLast: 0, rolling: 0, titles: [], honors: [], pQual: 1.0, pAge: 0,
   injuryMonths: 0, isPlayer: true, retired: false,
   activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
@@ -144,10 +144,17 @@ const App: React.FC = () => {
           jump: parsed.skater.tec,
           spin: parsed.skater.tec,
           step: (parsed.skater.tec + parsed.skater.art) / 2,
-          aura: parsed.skater.art,
+          perf: parsed.skater.art,
           endurance: 40
         };
+      } else if ('aura' in parsed.skater.attributes) {
+        // Migration from Aura to Perf
+        parsed.skater.attributes.perf = parsed.skater.attributes.aura;
+        delete parsed.skater.attributes.aura;
       }
+      // Migrate schedule tasks
+      parsed.schedule = parsed.schedule.map((t: any) => t === 'aura' ? 'perf' : t);
+      
       return parsed;
     }
     const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
@@ -247,7 +254,7 @@ const App: React.FC = () => {
 
   const calculateWeeklyStats = useCallback((currentSchedule: TrainingTaskType[], startSta: number, currentCoach: Coach, skaterAge: number) => {
     let tempSta = startSta;
-    let gains: Record<string, number> = { jump: 0, spin: 0, step: 0, aura: 0, endurance: 0 };
+    let gains: Record<string, number> = { jump: 0, spin: 0, step: 0, perf: 0, endurance: 0 };
     let artPlanPoints = 0; 
 
     const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
@@ -260,17 +267,17 @@ const App: React.FC = () => {
       else if (tempSta < 20) efficiency = 0.3;
 
       if (task.targetAttr) {
-        // TEC mod for jump/spin/step/endurance? ART mod for aura/step?
-        // Simplifying: TecMod applies to Jump/Spin/Endurance, ArtMod to Aura, Mixed to Step
+        // TEC mod for jump/spin/step/endurance? ART mod for perf/step?
+        // Simplifying: TecMod applies to Jump/Spin/Endurance, ArtMod to Perf, Mixed to Step
         let coachMod = 1.0;
         if (['jump', 'spin', 'endurance'].includes(task.targetAttr)) coachMod = currentCoach.tecMod;
-        else if (task.targetAttr === 'aura') coachMod = currentCoach.artMod;
+        else if (task.targetAttr === 'perf') coachMod = currentCoach.artMod;
         else if (task.targetAttr === 'step') coachMod = (currentCoach.tecMod + currentCoach.artMod) / 2;
 
         gains[task.targetAttr] += task.baseGain * coachMod * ageMod * efficiency;
       }
       
-      if (task.targetAttr === 'aura' || task.targetAttr === 'step') artPlanPoints += task.baseGain; 
+      if (task.targetAttr === 'perf' || task.targetAttr === 'step') artPlanPoints += task.baseGain; 
 
       tempSta = clamp(tempSta - task.staCost, 0, 100);
     }
@@ -389,9 +396,9 @@ const App: React.FC = () => {
         if (e.fame) fameBonus += e.fame;
         // Event effect still targets tec/art directly. Let's distribute it to attributes if possible or just keep global bonus?
         // For simplicity, let's say events affect specific attributes slightly or just rely on derived recalc.
-        // Actually, let's apply event effect to Jump/Aura as proxy for Tec/Art.
+        // Actually, let's apply event effect to Jump/Perf as proxy for Tec/Art.
         if (e.tec) updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.tec, 0, 100);
-        if (e.art) updatedSkater.attributes!.aura = clamp(updatedSkater.attributes!.aura + e.art, 0, 100);
+        if (e.art) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.art, 0, 100);
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
         
         // Recalc after event
@@ -474,7 +481,7 @@ const App: React.FC = () => {
     if (!game.skater.attributes) return [];
     return [
       { subject: '爆发 JUMP', A: game.skater.attributes.jump, fullMark: 100 },
-      { subject: '表现 AURA', A: game.skater.attributes.aura, fullMark: 100 },
+      { subject: '表现 PERF', A: game.skater.attributes.perf, fullMark: 100 },
       { subject: '耐力 END', A: game.skater.attributes.endurance, fullMark: 100 },
       { subject: '步法 STEP', A: game.skater.attributes.step, fullMark: 100 },
       { subject: '旋转 SPIN', A: game.skater.attributes.spin, fullMark: 100 },
@@ -575,7 +582,7 @@ const App: React.FC = () => {
                      { label: 'JUMP', val: game.skater.attributes.jump, color: 'text-red-400', border: 'border-red-500/20', bg: 'bg-red-500/5' },
                      { label: 'SPIN', val: game.skater.attributes.spin, color: 'text-indigo-400', border: 'border-indigo-500/20', bg: 'bg-indigo-500/5' },
                      { label: 'STEP', val: game.skater.attributes.step, color: 'text-cyan-400', border: 'border-cyan-500/20', bg: 'bg-cyan-500/5' },
-                     { label: 'AURA', val: game.skater.attributes.aura, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5' },
+                     { label: 'PERF', val: game.skater.attributes.perf, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5' },
                      { label: 'END', val: game.skater.attributes.endurance, color: 'text-amber-400', border: 'border-amber-500/20', bg: 'bg-amber-500/5' },
                    ].map((stat) => (
                      <div key={stat.label} className={`flex flex-col items-center justify-center py-2 rounded-lg border ${stat.border} ${stat.bg} backdrop-blur-sm`}>
