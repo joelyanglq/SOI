@@ -1,12 +1,15 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { 
-  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType 
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis 
+} from 'recharts';
+import { 
+  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType, PlayerAttributes 
 } from './types';
 import { 
   SURNAME, GIVEN, COACHES, CITIES, RANDOM_EVENTS, EQUIP_NAMES, CHOREO_NAMES,
-  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS
+  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS 
 } from './constants';
 
 const randNormal = (mean = 0, sd = 1) => {
@@ -21,6 +24,12 @@ const clamp = (v: number, min = 0, max = 100) => Math.max(min, Math.min(max, v))
 
 const calculateRolling = (s: { pointsCurrent: number, pointsLast: number }) => {
   return Math.floor(s.pointsCurrent + (s.pointsLast * 0.7));
+};
+
+const calcDerivedStats = (attrs: PlayerAttributes) => {
+  const tec = (attrs.jump * 0.5) + (attrs.spin * 0.3) + (attrs.step * 0.2);
+  const art = (attrs.aura * 0.6) + (attrs.step * 0.4);
+  return { tec: clamp(tec), art: clamp(art) };
 };
 
 const generateInitialAI = (): Skater[] => {
@@ -115,6 +124,7 @@ const generateMarket = (activeCoachId: string | null = null, currentMarket: any 
 
 const INITIAL_SKATER: Skater = {
   id: 'player_1', name: "未命名选手", age: 14.1, tec: 40.0, art: 35.0, sta: 100.0,
+  attributes: { jump: 40, spin: 40, step: 40, aura: 30, endurance: 30 },
   pointsCurrent: 0, pointsLast: 0, rolling: 0, titles: [], honors: [], pQual: 1.0, pAge: 0,
   injuryMonths: 0, isPlayer: true, retired: false,
   activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
@@ -127,13 +137,23 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('FS_MANAGER_V11_PRO');
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Migration: Ensure schedule exists if coming from old save
+      // Migration: Ensure schedule and attributes exist
       if (!parsed.schedule) parsed.schedule = [...DEFAULT_SCHEDULE];
+      if (!parsed.skater.attributes) {
+        parsed.skater.attributes = {
+          jump: parsed.skater.tec,
+          spin: parsed.skater.tec,
+          step: (parsed.skater.tec + parsed.skater.art) / 2,
+          aura: parsed.skater.art,
+          endurance: 40
+        };
+      }
       return parsed;
     }
+    const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
     return {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
-      skater: { ...INITIAL_SKATER, rolling: calculateRolling(INITIAL_SKATER) },
+      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
@@ -180,9 +200,10 @@ const App: React.FC = () => {
 
   const confirmResetGame = () => {
     localStorage.removeItem('FS_MANAGER_V11_PRO');
+    const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
     const resetState: GameState = {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
-      skater: { ...INITIAL_SKATER, rolling: calculateRolling(INITIAL_SKATER) },
+      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
@@ -226,9 +247,8 @@ const App: React.FC = () => {
 
   const calculateWeeklyStats = useCallback((currentSchedule: TrainingTaskType[], startSta: number, currentCoach: Coach, skaterAge: number) => {
     let tempSta = startSta;
-    let tecGain = 0;
-    let artGain = 0;
-    let artPlanPoints = 0; // For program freshness calculation
+    let gains: Record<string, number> = { jump: 0, spin: 0, step: 0, aura: 0, endurance: 0 };
+    let artPlanPoints = 0; 
 
     const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
 
@@ -239,14 +259,22 @@ const App: React.FC = () => {
       if (tempSta <= 0) efficiency = 0;
       else if (tempSta < 20) efficiency = 0.3;
 
-      tecGain += task.tec * currentCoach.tecMod * ageMod * efficiency;
-      artGain += task.art * currentCoach.artMod * ageMod * efficiency;
+      if (task.targetAttr) {
+        // TEC mod for jump/spin/step/endurance? ART mod for aura/step?
+        // Simplifying: TecMod applies to Jump/Spin/Endurance, ArtMod to Aura, Mixed to Step
+        let coachMod = 1.0;
+        if (['jump', 'spin', 'endurance'].includes(task.targetAttr)) coachMod = currentCoach.tecMod;
+        else if (task.targetAttr === 'aura') coachMod = currentCoach.artMod;
+        else if (task.targetAttr === 'step') coachMod = (currentCoach.tecMod + currentCoach.artMod) / 2;
+
+        gains[task.targetAttr] += task.baseGain * coachMod * ageMod * efficiency;
+      }
       
-      if (task.art > 0) artPlanPoints += task.art; // Approximate art intensity for freshness
+      if (task.targetAttr === 'aura' || task.targetAttr === 'step') artPlanPoints += task.baseGain; 
 
       tempSta = clamp(tempSta - task.staCost, 0, 100);
     }
-    return { finalSta: tempSta, tecGain, artGain, artPlanPoints };
+    return { finalSta: tempSta, gains, artPlanPoints };
   }, []);
 
   const nextMonth = async () => {
@@ -262,18 +290,34 @@ const App: React.FC = () => {
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
       
       // Calculate growth based on schedule
-      const { finalSta, tecGain: rawTec, artGain: rawArt, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age);
+      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age);
 
-      // Apply some randomness to the result
-      const tecGain = clamp(randNormal(rawTec, 0.1), 0, 3.0);
-      const artGain = clamp(randNormal(rawArt, 0.1), 0, 3.0);
+      // Apply growth to attributes
+      const currentAttrs = { ...prev.skater.attributes! };
+      const attrKeys = Object.keys(currentAttrs) as (keyof PlayerAttributes)[];
+      
+      attrKeys.forEach(k => {
+        const rawGain = gains[k] || 0;
+        const gain = clamp(randNormal(rawGain, 0.1), 0, 3.0);
+        currentAttrs[k] = clamp(currentAttrs[k] + gain, 0, 100);
+      });
+
+      const derived = calcDerivedStats(currentAttrs);
 
       const updatedInventory = prev.inventory.map(item => ({ ...item, lifespan: item.lifespan - 1 }));
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
 
+      // Apply Equipment Bonus to derived stats (Equipment still targets TEC/ART globally for now or I'd need to refactor Equipment too. Let's keep Equipment adding to global TEC/ART on top of derived for simplicity, OR distribute equip bonus. 
+      // User said "Update attributes refactoring", implying deep change.
+      // But Equipment interface has tecBonus/artBonus.
+      // Let's apply Equipment bonus to the *derived* totals.
+      let equipTec = 0, equipArt = 0;
+      remainingInventory.forEach(eq => { equipTec += eq.tecBonus; equipArt += eq.artBonus; });
+
       let updatedSkater = { ...prev.skater, 
-        tec: clamp(prev.skater.tec + tecGain, 0, 100), 
-        art: clamp(prev.skater.art + artGain, 0, 100),
+        attributes: currentAttrs,
+        tec: clamp(derived.tec + equipTec, 0, 100), 
+        art: clamp(derived.art + equipArt, 0, 100),
         sta: finalSta,
         age: prev.skater.age + 0.083,
         activeProgram: { 
@@ -295,28 +339,18 @@ const App: React.FC = () => {
         if (prev.month === 12) { aiUp.pointsLast = aiUp.pointsCurrent; aiUp.pointsCurrent = 0; }
         
         const currentMonthEvents = [...(seasonCalendar[prev.month] || [])].sort((a,b) => b.pts - a.pts);
-        
-        // Elite AI priority: Pick the highest points event they qualify for
         const targetEvent = currentMonthEvents.find(ev => (aiUp.rolling || 0) >= ev.req);
         
         if (targetEvent && aiUp.injuryMonths === 0) {
-            // High rolling players have higher participation priority (up to 95% for elites)
             const baseProb = aiUp.rolling! > 5000 ? 0.95 : 0.65;
             if (Math.random() < baseProb) {
-                // AI Rank Simulation: Heavily biased by their TEC + ART stats
-                // Top AI should almost always rank top 1-5 in qualified events
-                const totalStat = aiUp.tec + aiUp.art; // Range 60-200
-                const skillFactor = clamp((200 - totalStat) / 200, 0, 1); // 0 (best) to 1 (worst)
-                
-                // Shift the mean of normal distribution based on skill
+                const totalStat = aiUp.tec + aiUp.art;
+                const skillFactor = clamp((200 - totalStat) / 200, 0, 1);
                 const biasedMean = (targetEvent.max * skillFactor * 0.7) + 1;
                 const rank = clamp(Math.floor(randNormal(biasedMean, targetEvent.max * 0.15)), 1, targetEvent.max);
-                
                 aiUp.pointsCurrent += Math.floor(targetEvent.pts / (rank * 0.4 + 0.6));
             }
         }
-
-        // Slight natural growth for AI
         aiUp.tec = clamp(aiUp.tec + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
         aiUp.art = clamp(aiUp.art + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
         aiUp.rolling = calculateRolling(aiUp);
@@ -353,9 +387,17 @@ const App: React.FC = () => {
         const e = triggeredEvent.effect;
         if (e.money) moneyBonus += e.money;
         if (e.fame) fameBonus += e.fame;
-        if (e.tec) updatedSkater.tec = clamp(updatedSkater.tec + e.tec, 0, 100);
-        if (e.art) updatedSkater.art = clamp(updatedSkater.art + e.art, 0, 100);
+        // Event effect still targets tec/art directly. Let's distribute it to attributes if possible or just keep global bonus?
+        // For simplicity, let's say events affect specific attributes slightly or just rely on derived recalc.
+        // Actually, let's apply event effect to Jump/Aura as proxy for Tec/Art.
+        if (e.tec) updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.tec, 0, 100);
+        if (e.art) updatedSkater.attributes!.aura = clamp(updatedSkater.attributes!.aura + e.art, 0, 100);
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
+        
+        // Recalc after event
+        const d = calcDerivedStats(updatedSkater.attributes!);
+        updatedSkater.tec = clamp(d.tec + equipTec, 0, 100);
+        updatedSkater.art = clamp(d.art + equipArt, 0, 100);
       }
 
       const updatedHistory = [...prev.history, { 
@@ -372,6 +414,10 @@ const App: React.FC = () => {
       if (finalSta < 10) {
         setTimeout(() => addLog("由于过度疲劳，部分训练效果严重受损！请务必安排休息。", 'event'), 300);
       }
+
+      // Calculate last growth for display (derived)
+      const tecGain = updatedSkater.tec - prev.skater.tec;
+      const artGain = updatedSkater.art - prev.skater.art;
 
       return { 
         ...prev, year: ny, month: nm, 
@@ -396,7 +442,24 @@ const App: React.FC = () => {
 
   const buyItem = (item: Equipment) => {
     if (game.money < item.price) return alert("资金不足");
-    setGame(prev => ({ ...prev, money: prev.money - item.price, inventory: [...prev.inventory, { ...item, owned: true }], skater: { ...prev.skater, tec: prev.skater.tec + item.tecBonus, art: prev.skater.art + item.artBonus } }));
+    setGame(prev => {
+        // Recalc stats with new item
+        const newInv = [...prev.inventory, { ...item, owned: true }];
+        let equipTec = 0, equipArt = 0;
+        newInv.forEach(eq => { if(eq.lifespan > 0) { equipTec += eq.tecBonus; equipArt += eq.artBonus; }});
+        const d = calcDerivedStats(prev.skater.attributes!);
+        
+        return { 
+            ...prev, 
+            money: prev.money - item.price, 
+            inventory: newInv,
+            skater: { 
+                ...prev.skater, 
+                tec: clamp(d.tec + equipTec, 0, 100), 
+                art: clamp(d.art + equipArt, 0, 100) 
+            } 
+        };
+    });
     addLog(`购入器材: ${item.name}`, 'shop');
   };
 
@@ -406,6 +469,17 @@ const App: React.FC = () => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
     return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age);
   }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats]);
+
+  const radarData = useMemo(() => {
+    if (!game.skater.attributes) return [];
+    return [
+      { subject: '爆发 JUMP', A: game.skater.attributes.jump, fullMark: 100 },
+      { subject: '表现 AURA', A: game.skater.attributes.aura, fullMark: 100 },
+      { subject: '耐力 END', A: game.skater.attributes.endurance, fullMark: 100 },
+      { subject: '步法 STEP', A: game.skater.attributes.step, fullMark: 100 },
+      { subject: '旋转 SPIN', A: game.skater.attributes.spin, fullMark: 100 },
+    ];
+  }, [game.skater.attributes]);
 
   if (isNaming) {
     return (
@@ -479,30 +553,50 @@ const App: React.FC = () => {
 
       <main className="container mx-auto grid grid-cols-12 gap-8 p-8">
         <div className="col-span-3 space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 shadow-2xl relative overflow-hidden group">
+          <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 shadow-2xl relative overflow-hidden group min-h-[500px] flex flex-col">
             <h2 className="text-3xl font-black text-white italic tracking-tighter mb-2">{game.skater.name}</h2>
             <p className="text-[10px] text-slate-500 mb-6 font-bold uppercase tracking-[0.2em]">节目: {game.skater.activeProgram.name}</p>
-            <div className="space-y-6 relative z-10">
-              {[ 
-                { l: "技术 TEC", v: game.skater.tec, c: "bg-blue-500", g: game.lastGrowth?.tec }, 
-                { l: "艺术 ART", v: game.skater.art, c: "bg-purple-500", g: game.lastGrowth?.art }, 
-                { l: "体力 STA", v: game.skater.sta, c: "bg-emerald-500", g: 0 } 
-              ].map(s => (
-                <div key={s.l}>
-                  <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-2 uppercase tracking-widest">
-                    {s.l} 
-                    <div className="flex items-center gap-2">
-                      {s.g! > 0 && <span className="text-[9px] text-emerald-400 font-black">+{s.g?.toFixed(2)}</span>}
-                      <span>{s.v.toFixed(2)}</span>
-                    </div>
-                  </div>
-                  <div className="h-2.5 bg-slate-950 rounded-full overflow-hidden shadow-inner"><div className={`${s.c} h-full transition-all duration-1000`} style={{ width: `${s.v}%` }}></div></div>
-                </div>
-              ))}
+            
+            <div className="flex-1 relative -mx-8 -my-4">
+                <ResponsiveContainer width="100%" height={250}>
+                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                        <PolarGrid stroke="#334155" />
+                        <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 9, fontWeight: 900 }} />
+                        <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+                        <Radar name="Skater" dataKey="A" stroke="#3b82f6" strokeWidth={2} fill="#3b82f6" fillOpacity={0.3} />
+                    </RadarChart>
+                </ResponsiveContainer>
             </div>
-            <div className="mt-8 pt-8 border-t border-slate-800 grid grid-cols-2 gap-4 text-center">
-              <div><p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">名望</p><p className="text-2xl font-black text-amber-500 font-mono">{game.fame}</p></div>
-              <div><p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">年龄</p><p className="text-2xl font-black text-slate-300 font-mono">{game.skater.age.toFixed(1)}</p></div>
+
+            <div className="space-y-4 relative z-10">
+              {game.skater.attributes && (
+                <div className="grid grid-cols-5 gap-2 mb-2">
+                   {[
+                     { label: 'JUMP', val: game.skater.attributes.jump, color: 'text-red-400', border: 'border-red-500/20', bg: 'bg-red-500/5' },
+                     { label: 'SPIN', val: game.skater.attributes.spin, color: 'text-indigo-400', border: 'border-indigo-500/20', bg: 'bg-indigo-500/5' },
+                     { label: 'STEP', val: game.skater.attributes.step, color: 'text-cyan-400', border: 'border-cyan-500/20', bg: 'bg-cyan-500/5' },
+                     { label: 'AURA', val: game.skater.attributes.aura, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5' },
+                     { label: 'END', val: game.skater.attributes.endurance, color: 'text-amber-400', border: 'border-amber-500/20', bg: 'bg-amber-500/5' },
+                   ].map((stat) => (
+                     <div key={stat.label} className={`flex flex-col items-center justify-center py-2 rounded-lg border ${stat.border} ${stat.bg} backdrop-blur-sm`}>
+                       <span className={`text-[8px] font-black ${stat.color} tracking-wider mb-0.5`}>{stat.label}</span>
+                       <span className="text-xs font-black text-white">{stat.val.toFixed(0)}</span>
+                     </div>
+                   ))}
+                </div>
+              )}
+
+              <div>
+                  <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1 uppercase tracking-widest">
+                    <span>全局体力 STA</span>
+                    <span className={game.skater.sta < 20 ? "text-red-500 animate-pulse" : "text-emerald-400"}>{game.skater.sta.toFixed(0)} / 100</span>
+                  </div>
+                  <div className="h-1.5 bg-slate-950 rounded-full overflow-hidden shadow-inner"><div className={`h-full transition-all duration-1000 ${game.skater.sta < 20 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${game.skater.sta}%` }}></div></div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-[10px] text-slate-500 font-bold uppercase">
+                  <div className="bg-slate-950 p-2 rounded-xl text-center"><span className="block text-blue-400 font-black text-lg">{game.skater.tec.toFixed(0)}</span>综合技术 TEC</div>
+                  <div className="bg-slate-950 p-2 rounded-xl text-center"><span className="block text-purple-400 font-black text-lg">{game.skater.art.toFixed(0)}</span>综合艺术 ART</div>
+              </div>
             </div>
           </div>
 
@@ -564,10 +658,12 @@ const App: React.FC = () => {
                             <p className={`text-xl font-mono font-black ${statsPreview.finalSta < 20 ? 'text-red-500' : 'text-emerald-400'}`}>{statsPreview.finalSta.toFixed(0)}%</p>
                         </div>
                         <div className="text-right">
-                             <p className="text-[10px] font-black text-slate-500 uppercase">预计收益</p>
-                             <div className="flex gap-3">
-                                <span className="text-xs font-black text-blue-400">TEC +{statsPreview.tecGain.toFixed(2)}</span>
-                                <span className="text-xs font-black text-purple-400">ART +{statsPreview.artGain.toFixed(2)}</span>
+                             <p className="text-[10px] font-black text-slate-500 uppercase">重点强化属性</p>
+                             <div className="flex gap-2 justify-end">
+                                {Object.entries(statsPreview.gains).filter(([k,v]) => v > 0).slice(0, 3).map(([k,v]) => (
+                                    <span key={k} className="text-[10px] font-black bg-slate-800 px-2 py-0.5 rounded text-white uppercase">{k} +{v.toFixed(1)}</span>
+                                ))}
+                                {Object.keys(statsPreview.gains).every(k => statsPreview.gains[k] <= 0) && <span className="text-[10px] text-slate-600 italic">休整期</span>}
                              </div>
                         </div>
                     </div>
@@ -588,9 +684,6 @@ const App: React.FC = () => {
                                         }
                                     }}
                                     onClick={() => {
-                                        // Simple cycle or removal if clicked without drag? 
-                                        // Better UX: if dragging is hard, clicking a slot sets it to 'rest' or cycles?
-                                        // Let's just make clicking remove it (set to rest)
                                         const newSchedule = [...game.schedule];
                                         newSchedule[idx] = 'rest';
                                         setGame(prev => ({ ...prev, schedule: newSchedule }));
@@ -620,8 +713,7 @@ const App: React.FC = () => {
                                 </div>
                                 <p className="text-[8px] text-slate-500 mb-2 h-6 overflow-hidden leading-tight">{task.desc}</p>
                                 <div className="flex gap-2 text-[8px] font-mono font-black">
-                                    {task.tec > 0 && <span className="text-blue-500">TEC+{task.tec}</span>}
-                                    {task.art > 0 && <span className="text-purple-500">ART+{task.art}</span>}
+                                    {task.targetAttr && <span className="text-blue-400 uppercase">{task.targetAttr}</span>}
                                     <span className={task.staCost > 0 ? 'text-red-500' : 'text-emerald-500'}>STA{task.staCost > 0 ? '-' : '+'}{Math.abs(task.staCost)}</span>
                                 </div>
                             </div>
@@ -841,6 +933,10 @@ const App: React.FC = () => {
                            showMatch.event.name.includes("奥运会") || 
                            showMatch.event.name.includes("总决赛");
             
+            // Endurance reduces STA consumption
+            const enduranceFactor = game.skater.attributes ? (game.skater.attributes.endurance / 200) : 0; 
+            const finalStaCost = Math.max(5, MATCH_STAMINA_COST * (1 - enduranceFactor));
+
             setGame(prev => {
               const shouldRecordHonor = rank === 1 || (isMajor && rank <= 3);
               const honors = [...(prev.skater.honors || [])];
@@ -851,7 +947,7 @@ const App: React.FC = () => {
               const updatedSkater = { 
                 ...prev.skater, 
                 pointsCurrent: prev.skater.pointsCurrent + pts, 
-                sta: clamp(prev.skater.sta - MATCH_STAMINA_COST, 0, 100), 
+                sta: clamp(prev.skater.sta - finalStaCost, 0, 100), 
                 activeProgram: { ...prev.skater.activeProgram, freshness: clamp(prev.skater.activeProgram.freshness - 18, 0, 100) }, 
                 honors: honors,
                 titles: rank === 1 ? [...prev.skater.titles, showMatch.event.name] : prev.skater.titles 
@@ -900,10 +996,13 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
     
     if (p.isPlayer) {
       const freshnessMod = Math.max(0.4, p.activeProgram.freshness / 100);
+      
+      // Endurance reduces fatigue impact
+      const enduranceBonus = p.attributes ? (p.attributes.endurance * 0.05) : 0;
+      const staFactor = Math.min(1.0, 0.92 + (p.sta / 100) * 0.08 + (enduranceBonus / 100));
+      
       const failChance = clamp(risk * 50 - p.tec * 0.4, 5, 95);
       const isFail = Math.random() * 100 < failChance;
-      
-      const staFactor = 0.92 + (p.sta / 100) * 0.08;
       
       const tes = (event.base + risk * 30) + (p.tec * 0.9) + (Math.random() * 15);
       const pcs = (p.art * 1.1 + (p.activeProgram?.baseArt || 30)) * freshnessMod;

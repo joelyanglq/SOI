@@ -13,12 +13,21 @@ export interface HonorRecord {
   points: number;
 }
 
+export interface PlayerAttributes {
+  jump: number;
+  spin: number;
+  step: number;
+  aura: number;
+  endurance: number;
+}
+
 export interface Skater {
   name: string;
   age: number;
-  tec: number;
-  art: number;
-  sta: number;
+  tec: number; // Calculated from attributes for player, raw for AI
+  art: number; // Calculated from attributes for player, raw for AI
+  sta: number; // Global Stamina Resource
+  attributes?: PlayerAttributes; // Only for player
   pointsCurrent: number;
   pointsLast: number;
   rolling?: number;
@@ -93,14 +102,14 @@ export interface RandomEvent {
   type: 'positive' | 'negative' | 'neutral';
 }
 
-export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'art' | 'physical' | 'rest';
+export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'aura' | 'endurance' | 'rest';
 
 export interface TrainingTaskDefinition {
   id: TrainingTaskType;
   name: string;
   color: string;
-  tec: number;
-  art: number;
+  targetAttr?: keyof PlayerAttributes;
+  baseGain: number;
   staCost: number; // positive = cost, negative = gain
   desc: string;
 }
