@@ -27,8 +27,8 @@ const calculateRolling = (s: { pointsCurrent: number, pointsLast: number }) => {
 };
 
 const calcDerivedStats = (attrs: PlayerAttributes) => {
-  const tec = (attrs.jump * 0.5) + (attrs.spin * 0.3) + (attrs.step * 0.2);
-  const art = (attrs.perf * 0.6) + (attrs.step * 0.4);
+  const tec = (attrs.jump * 0.4) + (attrs.spin * 0.3) + (attrs.step * 0.2) + (attrs.endurance * 0.1);
+  const art = (attrs.perf * 0.5) + (attrs.step * 0.3) + (attrs.endurance * 0.2);
   return { tec: clamp(tec), art: clamp(art) };
 };
 
@@ -252,19 +252,28 @@ const App: React.FC = () => {
 
   useEffect(() => { localStorage.setItem('FS_MANAGER_V11_PRO', JSON.stringify(game)); }, [game]);
 
-  const calculateWeeklyStats = useCallback((currentSchedule: TrainingTaskType[], startSta: number, currentCoach: Coach, skaterAge: number) => {
+  const calculateWeeklyStats = useCallback((currentSchedule: TrainingTaskType[], startSta: number, currentCoach: Coach, skaterAge: number, currentEndurance: number) => {
     let tempSta = startSta;
     let gains: Record<string, number> = { jump: 0, spin: 0, step: 0, perf: 0, endurance: 0 };
     let artPlanPoints = 0; 
 
     const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
+    // Endurance reduces stamina cost by up to 50%
+    const enduranceCostReduction = currentEndurance / 200;
+    // Endurance improves training efficiency by up to 20%
+    const enduranceEfficiencyBonus = currentEndurance / 500;
 
     for (const taskId of currentSchedule) {
       const task = TRAINING_TASKS[taskId];
       
-      let efficiency = 1.0;
+      // Calculate adjusted stamina cost based on endurance
+      const adjustedStaCost = task.staCost * (1 - enduranceCostReduction);
+      
+      // Calculate efficiency with endurance bonus
+      let efficiency = 1.0 + enduranceEfficiencyBonus;
       if (tempSta <= 0) efficiency = 0;
-      else if (tempSta < 20) efficiency = 0.3;
+      else if (tempSta < 20) efficiency = 0.3 + enduranceEfficiencyBonus;
+      efficiency = Math.min(efficiency, 1.2); // Cap efficiency at 120%
 
       if (task.targetAttr) {
         // TEC mod for jump/spin/step/endurance? ART mod for perf/step?
@@ -279,7 +288,7 @@ const App: React.FC = () => {
       
       if (task.targetAttr === 'perf' || task.targetAttr === 'step') artPlanPoints += task.baseGain; 
 
-      tempSta = clamp(tempSta - task.staCost, 0, 100);
+      tempSta = clamp(tempSta - adjustedStaCost, 0, 100);
     }
     return { finalSta: tempSta, gains, artPlanPoints };
   }, []);
@@ -297,7 +306,7 @@ const App: React.FC = () => {
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
       
       // Calculate growth based on schedule
-      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age);
+      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance);
 
       // Apply growth to attributes
       const currentAttrs = { ...prev.skater.attributes! };
@@ -394,11 +403,19 @@ const App: React.FC = () => {
         const e = triggeredEvent.effect;
         if (e.money) moneyBonus += e.money;
         if (e.fame) fameBonus += e.fame;
-        // Event effect still targets tec/art directly. Let's distribute it to attributes if possible or just keep global bonus?
-        // For simplicity, let's say events affect specific attributes slightly or just rely on derived recalc.
-        // Actually, let's apply event effect to Jump/Perf as proxy for Tec/Art.
-        if (e.tec) updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.tec, 0, 100);
-        if (e.art) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.art, 0, 100);
+        // Apply event effects to specific attributes based on event type
+        if (e.tec) {
+          // Distribute tech effect across jump, spin, and endurance
+          updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.tec * 0.5, 0, 100);
+          updatedSkater.attributes!.spin = clamp(updatedSkater.attributes!.spin + e.tec * 0.3, 0, 100);
+          updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.tec * 0.2, 0, 100);
+        }
+        if (e.art) {
+          // Distribute art effect across perf, step, and endurance
+          updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.art * 0.5, 0, 100);
+          updatedSkater.attributes!.step = clamp(updatedSkater.attributes!.step + e.art * 0.3, 0, 100);
+          updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.art * 0.2, 0, 100);
+        }
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
         
         // Recalc after event
@@ -474,8 +491,8 @@ const App: React.FC = () => {
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age);
-  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats]);
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance);
+  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats, game.skater.attributes!.endurance]);
 
   const radarData = useMemo(() => {
     if (!game.skater.attributes) return [];
