@@ -47,9 +47,13 @@ export interface Equipment {
   name: string;
   type: 'skate' | 'blade' | 'costume';
   price: number;
-  tecBonus: number;
-  artBonus: number;
-  staBonus: number;
+  // 5D Bonus System
+  jumpBonus: number;
+  spinBonus: number;
+  stepBonus: number;
+  perfBonus: number;
+  enduranceBonus: number;
+  
   owned: boolean;
   lifespan: number; 
   maxLifespan: number;
@@ -94,10 +98,14 @@ export interface RandomEvent {
   effect: {
     money?: number;
     fame?: number;
-    tec?: number;
-    art?: number;
     sta?: number;
     injuryMonths?: number;
+    // 5D Attribute Effects
+    jump?: number;
+    spin?: number;
+    step?: number;
+    perf?: number;
+    endurance?: number;
   };
   type: 'positive' | 'negative' | 'neutral';
 }

@@ -109,11 +109,33 @@ const generateMarket = (activeCoachId: string | null = null, currentMarket: any 
     const activeOne = currentMarket.coaches.find((c: Coach) => c.id === activeCoachId);
     if (activeOne) newCoaches[0] = activeOne;
   }
+  
+  // Generating Equipment with 5D stats
+  // Skate: Jump ++, Step +, Endurance +
+  // Blade: Spin ++, Step ++, Jump +
+  // Costume: Perf ++, Art (indirectly via perf/step)
+  
   const equipment: Equipment[] = [
-    { id: 'skate_' + Math.random().toString(36).substr(2, 9), name: EQUIP_NAMES.skate[Math.floor(Math.random() * EQUIP_NAMES.skate.length)], type: 'skate', price: 2500, tecBonus: 2, artBonus: 0, staBonus: 5, owned: false, lifespan: 12, maxLifespan: 12 },
-    { id: 'blade_' + Math.random().toString(36).substr(2, 9), name: EQUIP_NAMES.blade[Math.floor(Math.random() * EQUIP_NAMES.blade.length)], type: 'blade', price: 5500, tecBonus: 4, artBonus: 0, staBonus: 0, owned: false, lifespan: 10, maxLifespan: 10 },
-    { id: 'costume_' + Math.random().toString(36).substr(2, 9), name: EQUIP_NAMES.costume[Math.floor(Math.random() * EQUIP_NAMES.costume.length)], type: 'costume', price: 15000, tecBonus: 0, artBonus: 10, staBonus: -2, owned: false, lifespan: 8, maxLifespan: 8 },
+    { 
+      id: 'skate_' + Math.random().toString(36).substr(2, 9), 
+      name: EQUIP_NAMES.skate[Math.floor(Math.random() * EQUIP_NAMES.skate.length)], 
+      type: 'skate', price: 2500, owned: false, lifespan: 12, maxLifespan: 12,
+      jumpBonus: 3, spinBonus: 0, stepBonus: 1, perfBonus: 0, enduranceBonus: 2
+    },
+    { 
+      id: 'blade_' + Math.random().toString(36).substr(2, 9), 
+      name: EQUIP_NAMES.blade[Math.floor(Math.random() * EQUIP_NAMES.blade.length)], 
+      type: 'blade', price: 5500, owned: false, lifespan: 10, maxLifespan: 10,
+      jumpBonus: 1, spinBonus: 3, stepBonus: 2, perfBonus: 0, enduranceBonus: 0
+    },
+    { 
+      id: 'costume_' + Math.random().toString(36).substr(2, 9), 
+      name: EQUIP_NAMES.costume[Math.floor(Math.random() * EQUIP_NAMES.costume.length)], 
+      type: 'costume', price: 15000, owned: false, lifespan: 8, maxLifespan: 8,
+      jumpBonus: 0, spinBonus: 0, stepBonus: 1, perfBonus: 5, enduranceBonus: -1
+    },
   ];
+
   const choreographers = [
     { name: CHOREO_NAMES[Math.floor(Math.random() * CHOREO_NAMES.length)], cost: 5000, base: 45, desc: "富有情感深度的基础编排。" },
     { name: CHOREO_NAMES[Math.floor(Math.random() * CHOREO_NAMES.length)], cost: 15000, base: 65, desc: "展现个人魅力的进阶构造。" },
@@ -197,6 +219,25 @@ const App: React.FC = () => {
       setSponsorOptions(generateSponsorshipOptions(game.fame));
     }
   }, [game.activeSponsor, game.fame, isNaming]);
+
+  // Helper to calculate total attributes including equipment
+  const getTotalAttributes = useCallback((base: PlayerAttributes, inventory: Equipment[]) => {
+    let total = { ...base };
+    inventory.forEach(item => {
+        if(item.lifespan > 0 && item.owned) {
+            total.jump += item.jumpBonus || 0;
+            total.spin += item.spinBonus || 0;
+            total.step += item.stepBonus || 0;
+            total.perf += item.perfBonus || 0;
+            total.endurance += item.enduranceBonus || 0;
+        }
+    });
+    // clamp all
+    (Object.keys(total) as (keyof PlayerAttributes)[]).forEach(k => {
+        total[k] = clamp(total[k]);
+    });
+    return total;
+  }, []);
 
   const handleStartGame = () => {
     if (!newName.trim()) return alert("请输入选手名字");
@@ -308,32 +349,21 @@ const App: React.FC = () => {
       // Calculate growth based on schedule
       const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance);
 
-      // Apply growth to attributes
-      const currentAttrs = { ...prev.skater.attributes! };
-      const attrKeys = Object.keys(currentAttrs) as (keyof PlayerAttributes)[];
+      // Apply growth to attributes (Base Attributes)
+      const currentBaseAttrs = { ...prev.skater.attributes! };
+      const attrKeys = Object.keys(currentBaseAttrs) as (keyof PlayerAttributes)[];
       
       attrKeys.forEach(k => {
         const rawGain = gains[k] || 0;
         const gain = clamp(randNormal(rawGain, 0.1), 0, 3.0);
-        currentAttrs[k] = clamp(currentAttrs[k] + gain, 0, 100);
+        currentBaseAttrs[k] = clamp(currentBaseAttrs[k] + gain, 0, 100);
       });
-
-      const derived = calcDerivedStats(currentAttrs);
 
       const updatedInventory = prev.inventory.map(item => ({ ...item, lifespan: item.lifespan - 1 }));
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
 
-      // Apply Equipment Bonus to derived stats (Equipment still targets TEC/ART globally for now or I'd need to refactor Equipment too. Let's keep Equipment adding to global TEC/ART on top of derived for simplicity, OR distribute equip bonus. 
-      // User said "Update attributes refactoring", implying deep change.
-      // But Equipment interface has tecBonus/artBonus.
-      // Let's apply Equipment bonus to the *derived* totals.
-      let equipTec = 0, equipArt = 0;
-      remainingInventory.forEach(eq => { equipTec += eq.tecBonus; equipArt += eq.artBonus; });
-
       let updatedSkater = { ...prev.skater, 
-        attributes: currentAttrs,
-        tec: clamp(derived.tec + equipTec, 0, 100), 
-        art: clamp(derived.art + equipArt, 0, 100),
+        attributes: currentBaseAttrs, // Storing base attributes
         sta: finalSta,
         age: prev.skater.age + 0.083,
         activeProgram: { 
@@ -342,6 +372,39 @@ const App: React.FC = () => {
           freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100) 
         }
       };
+      
+      let sponsorIncome = prev.activeSponsor ? prev.activeSponsor.monthlyPay : 0;
+      let updatedSponsor = prev.activeSponsor ? { ...prev.activeSponsor, remainingMonths: prev.activeSponsor.remainingMonths - 1 } : null;
+      if (updatedSponsor && updatedSponsor.remainingMonths <= 0) {
+        updatedSponsor = null;
+        setTimeout(() => addLog("赞助合约已到期", 'sys'), 200);
+      }
+      
+      let triggeredEvent: RandomEvent | null = null;
+      if (Math.random() < 0.2) triggeredEvent = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
+
+      let moneyBonus = 0, fameBonus = 0;
+      if (triggeredEvent) {
+        const e = triggeredEvent.effect;
+        if (e.money) moneyBonus += e.money;
+        if (e.fame) fameBonus += e.fame;
+        
+        // Apply event effects to specific 5D attributes
+        if (e.jump) updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.jump, 0, 100);
+        if (e.spin) updatedSkater.attributes!.spin = clamp(updatedSkater.attributes!.spin + e.spin, 0, 100);
+        if (e.step) updatedSkater.attributes!.step = clamp(updatedSkater.attributes!.step + e.step, 0, 100);
+        if (e.perf) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.perf, 0, 100);
+        if (e.endurance) updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.endurance, 0, 100);
+
+        if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
+      }
+
+      // Final Calculation: Combined Base + Inventory -> Derived Tec/Art
+      const totalAttrs = getTotalAttributes(updatedSkater.attributes!, remainingInventory);
+      const derived = calcDerivedStats(totalAttrs);
+      
+      updatedSkater.tec = derived.tec;
+      updatedSkater.art = derived.art;
 
       if (prev.month === 12) {
         updatedSkater.pointsLast = updatedSkater.pointsCurrent;
@@ -388,42 +451,6 @@ const App: React.FC = () => {
         return aiUp;
       });
 
-      let sponsorIncome = prev.activeSponsor ? prev.activeSponsor.monthlyPay : 0;
-      let updatedSponsor = prev.activeSponsor ? { ...prev.activeSponsor, remainingMonths: prev.activeSponsor.remainingMonths - 1 } : null;
-      if (updatedSponsor && updatedSponsor.remainingMonths <= 0) {
-        updatedSponsor = null;
-        setTimeout(() => addLog("赞助合约已到期", 'sys'), 200);
-      }
-      
-      let triggeredEvent: RandomEvent | null = null;
-      if (Math.random() < 0.2) triggeredEvent = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
-
-      let moneyBonus = 0, fameBonus = 0;
-      if (triggeredEvent) {
-        const e = triggeredEvent.effect;
-        if (e.money) moneyBonus += e.money;
-        if (e.fame) fameBonus += e.fame;
-        // Apply event effects to specific attributes based on event type
-        if (e.tec) {
-          // Distribute tech effect across jump, spin, and endurance
-          updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.tec * 0.5, 0, 100);
-          updatedSkater.attributes!.spin = clamp(updatedSkater.attributes!.spin + e.tec * 0.3, 0, 100);
-          updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.tec * 0.2, 0, 100);
-        }
-        if (e.art) {
-          // Distribute art effect across perf, step, and endurance
-          updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.art * 0.5, 0, 100);
-          updatedSkater.attributes!.step = clamp(updatedSkater.attributes!.step + e.art * 0.3, 0, 100);
-          updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.art * 0.2, 0, 100);
-        }
-        if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
-        
-        // Recalc after event
-        const d = calcDerivedStats(updatedSkater.attributes!);
-        updatedSkater.tec = clamp(d.tec + equipTec, 0, 100);
-        updatedSkater.art = clamp(d.art + equipArt, 0, 100);
-      }
-
       const updatedHistory = [...prev.history, { 
         month: `${prev.year}.${prev.month}`, 
         tec: Number(updatedSkater.tec.toFixed(2)), 
@@ -469,9 +496,10 @@ const App: React.FC = () => {
     setGame(prev => {
         // Recalc stats with new item
         const newInv = [...prev.inventory, { ...item, owned: true }];
-        let equipTec = 0, equipArt = 0;
-        newInv.forEach(eq => { if(eq.lifespan > 0) { equipTec += eq.tecBonus; equipArt += eq.artBonus; }});
-        const d = calcDerivedStats(prev.skater.attributes!);
+        
+        // Combine Base + New Inventory to get new Tec/Art
+        const totalAttrs = getTotalAttributes(prev.skater.attributes!, newInv);
+        const d = calcDerivedStats(totalAttrs);
         
         return { 
             ...prev, 
@@ -479,8 +507,8 @@ const App: React.FC = () => {
             inventory: newInv,
             skater: { 
                 ...prev.skater, 
-                tec: clamp(d.tec + equipTec, 0, 100), 
-                art: clamp(d.art + equipArt, 0, 100) 
+                tec: d.tec, 
+                art: d.art
             } 
         };
     });
@@ -494,16 +522,22 @@ const App: React.FC = () => {
     return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance);
   }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats, game.skater.attributes!.endurance]);
 
+  // Use Total Attributes for Display (Base + Equipment)
+  const displayAttributes = useMemo(() => {
+    if (!game.skater.attributes) return null;
+    return getTotalAttributes(game.skater.attributes, game.inventory);
+  }, [game.skater.attributes, game.inventory, getTotalAttributes]);
+
   const radarData = useMemo(() => {
-    if (!game.skater.attributes) return [];
+    if (!displayAttributes) return [];
     return [
-      { subject: '爆发 JUMP', A: game.skater.attributes.jump, fullMark: 100 },
-      { subject: '表现 PERF', A: game.skater.attributes.perf, fullMark: 100 },
-      { subject: '耐力 END', A: game.skater.attributes.endurance, fullMark: 100 },
-      { subject: '步法 STEP', A: game.skater.attributes.step, fullMark: 100 },
-      { subject: '旋转 SPIN', A: game.skater.attributes.spin, fullMark: 100 },
+      { subject: '爆发 JUMP', A: displayAttributes.jump, fullMark: 100 },
+      { subject: '表现 PERF', A: displayAttributes.perf, fullMark: 100 },
+      { subject: '耐力 END', A: displayAttributes.endurance, fullMark: 100 },
+      { subject: '步法 STEP', A: displayAttributes.step, fullMark: 100 },
+      { subject: '旋转 SPIN', A: displayAttributes.spin, fullMark: 100 },
     ];
-  }, [game.skater.attributes]);
+  }, [displayAttributes]);
 
   if (isNaming) {
     return (
@@ -593,14 +627,14 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-4 relative z-10">
-              {game.skater.attributes && (
+              {displayAttributes && (
                 <div className="grid grid-cols-5 gap-2 mb-2">
                    {[
-                     { label: 'JUMP', val: game.skater.attributes.jump, color: 'text-red-400', border: 'border-red-500/20', bg: 'bg-red-500/5' },
-                     { label: 'SPIN', val: game.skater.attributes.spin, color: 'text-indigo-400', border: 'border-indigo-500/20', bg: 'bg-indigo-500/5' },
-                     { label: 'STEP', val: game.skater.attributes.step, color: 'text-cyan-400', border: 'border-cyan-500/20', bg: 'bg-cyan-500/5' },
-                     { label: 'PERF', val: game.skater.attributes.perf, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5' },
-                     { label: 'END', val: game.skater.attributes.endurance, color: 'text-amber-400', border: 'border-amber-500/20', bg: 'bg-amber-500/5' },
+                     { label: 'JUMP', val: displayAttributes.jump, color: 'text-red-400', border: 'border-red-500/20', bg: 'bg-red-500/5' },
+                     { label: 'SPIN', val: displayAttributes.spin, color: 'text-indigo-400', border: 'border-indigo-500/20', bg: 'bg-indigo-500/5' },
+                     { label: 'STEP', val: displayAttributes.step, color: 'text-cyan-400', border: 'border-cyan-500/20', bg: 'bg-cyan-500/5' },
+                     { label: 'PERF', val: displayAttributes.perf, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5' },
+                     { label: 'END', val: displayAttributes.endurance, color: 'text-amber-400', border: 'border-amber-500/20', bg: 'bg-amber-500/5' },
                    ].map((stat) => (
                      <div key={stat.label} className={`flex flex-col items-center justify-center py-2 rounded-lg border ${stat.border} ${stat.bg} backdrop-blur-sm`}>
                        <span className={`text-[8px] font-black ${stat.color} tracking-wider mb-0.5`}>{stat.label}</span>
@@ -766,9 +800,12 @@ const App: React.FC = () => {
                             <div className="mb-4">
                               <p className="text-[8px] text-slate-600 font-black uppercase mb-1">{item.type} | 耐用度: {item.lifespan}月</p>
                               <p className="text-sm font-bold text-white">{item.name}</p>
-                              <div className="flex gap-4 mt-2">
-                                {item.tecBonus > 0 && <span className="text-[8px] font-black text-blue-400">TEC +{item.tecBonus}</span>}
-                                {item.artBonus > 0 && <span className="text-[8px] font-black text-purple-400">ART +{item.artBonus}</span>}
+                              <div className="flex gap-2 mt-2 flex-wrap">
+                                {item.jumpBonus > 0 && <span className="text-[8px] font-black text-red-400">JUMP +{item.jumpBonus}</span>}
+                                {item.spinBonus > 0 && <span className="text-[8px] font-black text-indigo-400">SPIN +{item.spinBonus}</span>}
+                                {item.stepBonus > 0 && <span className="text-[8px] font-black text-cyan-400">STEP +{item.stepBonus}</span>}
+                                {item.perfBonus > 0 && <span className="text-[8px] font-black text-purple-400">PERF +{item.perfBonus}</span>}
+                                {item.enduranceBonus > 0 && <span className="text-[8px] font-black text-amber-400">END +{item.enduranceBonus}</span>}
                               </div>
                             </div>
                             <button disabled={alreadyOwned} onClick={() => buyItem(item)} className={`text-[10px] w-full py-4 rounded-xl font-black transition-all uppercase tracking-widest ${alreadyOwned ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 text-white hover:scale-105 active:scale-95'}`}>
@@ -940,7 +977,7 @@ const App: React.FC = () => {
       </main>
 
       {game.activeEvent && (
-        <div className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500"><div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"><div className={`absolute top-0 left-0 w-full h-1.5 ${game.activeEvent.event.type === 'positive' ? 'bg-emerald-500' : game.activeEvent.event.type === 'negative' ? 'bg-red-500' : 'bg-blue-500'}`}></div><h2 className="text-3xl font-black text-white italic mb-6 uppercase tracking-tighter text-center">{game.activeEvent.event.name}</h2><div className="bg-slate-950/50 p-8 rounded-[2rem] mb-8 text-left italic text-slate-300 font-serif text-sm leading-relaxed border border-slate-800">"{game.activeEvent.narrative}"</div><div className="mb-10 space-y-3"><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-center mb-4">属性变动</p><div className="grid grid-cols-2 gap-3">{Object.entries(game.activeEvent.event.effect).map(([key, val]) => { if (val === 0) return null; const labelMap: any = { tec: 'TEC', art: 'ART', sta: 'STA', money: '资金', fame: '名望', injuryMonths: '伤病' }; const isPositive = (val as number) > 0; return ( <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 flex justify-between items-center"><span className="text-[10px] font-bold text-slate-400">{labelMap[key] || key}</span><span className={`font-black text-xs ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>{(val as number) > 0 ? '+' : ''}{val}</span></div> ); })}</div></div><button onClick={() => setGame(prev => ({ ...prev, activeEvent: null }))} className="w-full bg-white text-slate-950 py-5 rounded-2xl font-black text-xl active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认</button></div></div>
+        <div className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500"><div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"><div className={`absolute top-0 left-0 w-full h-1.5 ${game.activeEvent.event.type === 'positive' ? 'bg-emerald-500' : game.activeEvent.event.type === 'negative' ? 'bg-red-500' : 'bg-blue-500'}`}></div><h2 className="text-3xl font-black text-white italic mb-6 uppercase tracking-tighter text-center">{game.activeEvent.event.name}</h2><div className="bg-slate-950/50 p-8 rounded-[2rem] mb-8 text-left italic text-slate-300 font-serif text-sm leading-relaxed border border-slate-800">"{game.activeEvent.narrative}"</div><div className="mb-10 space-y-3"><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-center mb-4">属性变动</p><div className="grid grid-cols-2 gap-3">{Object.entries(game.activeEvent.event.effect).map(([key, val]) => { if (val === 0) return null; const labelMap: any = { tec: 'TEC', art: 'ART', sta: 'STA', money: '资金', fame: '名望', injuryMonths: '伤病', jump: 'JUMP', spin: 'SPIN', step: 'STEP', perf: 'PERF', endurance: 'END' }; const isPositive = (val as number) > 0; return ( <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 flex justify-between items-center"><span className="text-[10px] font-bold text-slate-400">{labelMap[key] || key}</span><span className={`font-black text-xs ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>{(val as number) > 0 ? '+' : ''}{val}</span></div> ); })}</div></div><button onClick={() => setGame(prev => ({ ...prev, activeEvent: null }))} className="w-full bg-white text-slate-950 py-5 rounded-2xl font-black text-xl active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认</button></div></div>
       )}
 
       {showMatch && (
@@ -1022,6 +1059,17 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
       const freshnessMod = Math.max(0.4, p.activeProgram.freshness / 100);
       
       // Endurance reduces fatigue impact
+      // Use Base Attributes if total attributes are not passed to MatchEngine, 
+      // BUT for simplicity in MatchEngine, we use `skater.attributes` which should ideally be TOTAL in context of match performance?
+      // Actually, standard practice: skater passed to MatchEngine has `tec` and `art` already calculated from Base+Equip in `nextMonth` or `buyItem`.
+      // So we use skater.tec and skater.art for the base calculation.
+      // But we need Endurance for Stamina Factor calculation in MatchEngine.
+      // Currently `skater.attributes` in state is BASE. 
+      // However, `skater.tec` and `skater.art` ARE derived (Total).
+      // Let's rely on `skater.attributes.endurance` (Base) for simplicity in MatchEngine stamina calculation, 
+      // OR ideally we should pass "Effective Skater" to MatchEngine.
+      // Given the refactor, let's keep it simple: `enduranceBonus` from equipment is mostly small.
+      
       const enduranceBonus = p.attributes ? (p.attributes.endurance * 0.05) : 0;
       const staFactor = Math.min(1.0, 0.92 + (p.sta / 100) * 0.08 + (enduranceBonus / 100));
       
@@ -1142,7 +1190,7 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
                   </div>
                 )}
 
-                <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
+                <div className="bg-slate-900 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
                 <button onClick={() => onClose(sorted)} className="bg-white text-slate-950 px-24 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认排名</button>
               </div>
             )}
