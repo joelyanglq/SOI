@@ -86,6 +86,7 @@ export interface GameEvent {
   req: number;
   max: number;
   prize?: number;
+  template: string; // 'low' | 'mid' | 'high'
   _simulated?: boolean;
 }
 
@@ -159,4 +160,25 @@ export interface LogEntry {
   msg: string;
   type: LogType;
   month: number;
+}
+
+// New Match Engine Types
+export type MatchPhaseType = 'jump_solo' | 'jump_combo' | 'spin' | 'step' | 'choreo';
+
+export interface MatchAction {
+  id: string;
+  name: string;
+  type: MatchPhaseType;
+  baseScore: number;
+  cost: number;
+  risk: number; // 0-1 base failure chance
+  reqStats: Partial<PlayerAttributes>; // Requirements to unlock
+  desc: string;
+}
+
+export interface MatchStructure {
+  id: string;
+  name: string;
+  desc: string;
+  phases: MatchPhaseType[];
 }

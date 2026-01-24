@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Equipment, Coach, RandomEvent, Sponsorship, TrainingTaskDefinition } from './types';
+import { Equipment, Coach, RandomEvent, Sponsorship, TrainingTaskDefinition, MatchAction, MatchStructure, MatchPhaseType, PlayerAttributes } from './types';
 
 export const MATCH_STAMINA_COST = 20;
 export const TRAIN_MAX_GAIN = 2.0;
@@ -12,6 +12,74 @@ export const P_AGE_START = 6;
 export const FATIGUE_SLOPE = 0.04;
 export const FATIGUE_CAP = 0.85;
 export const PCS_MIN = 0.15;
+
+// New: Phase Metadata (Icons & Desc)
+export const PHASE_META: Record<MatchPhaseType, { name: string; icon: string; relevantAttrs: (keyof PlayerAttributes)[] }> = {
+  jump_solo: { name: "单跳", icon: "🚀", relevantAttrs: ['jump'] },
+  jump_combo: { name: "连跳", icon: "⛓️", relevantAttrs: ['jump', 'endurance'] },
+  spin: { name: "旋转", icon: "🌪️", relevantAttrs: ['spin'] },
+  step: { name: "接续步", icon: "👣", relevantAttrs: ['step'] },
+  choreo: { name: "艺术编排", icon: "🎭", relevantAttrs: ['perf', 'endurance'] }
+};
+
+// New: Match Structures (Templates)
+export const MATCH_STRUCTURES: Record<string, MatchStructure> = {
+  low: { 
+    id: 'low', 
+    name: '地区赛制', 
+    desc: '流程较短，仅包含基础考核，适合新人磨练技术。',
+    phases: ['jump_solo', 'spin', 'choreo'] 
+  },
+  mid: { 
+    id: 'mid', 
+    name: '大奖赛制', 
+    desc: '标准比赛流程，增加了连跳环节，开始考验体力分配。',
+    phases: ['jump_solo', 'jump_combo', 'spin', 'choreo'] 
+  },
+  high: { 
+    id: 'high', 
+    name: '锦标赛制', 
+    desc: '最高规格的完整流程，包含所有技术环节，是对身心的极限挑战。',
+    phases: ['jump_solo', 'jump_combo', 'spin', 'step', 'choreo'] 
+  }
+};
+
+// New: Action Library
+export const ACTION_LIBRARY: MatchAction[] = [
+  // --- Solo Jumps ---
+  { id: 'j_waltz', name: '华尔兹跳', type: 'jump_solo', baseScore: 1.0, cost: 2, risk: 0.0, reqStats: {}, desc: "基础入门跳跃。" },
+  { id: 'j_2a', name: '两周半 (2A)', type: 'jump_solo', baseScore: 3.3, cost: 5, risk: 0.05, reqStats: { jump: 20 }, desc: "职业选手的门槛。" },
+  { id: 'j_3t', name: '后外点冰三周 (3T)', type: 'jump_solo', baseScore: 4.2, cost: 8, risk: 0.15, reqStats: { jump: 40 }, desc: "常见的三周跳跃。" },
+  { id: 'j_3lz', name: '勾手三周 (3Lz)', type: 'jump_solo', baseScore: 5.9, cost: 12, risk: 0.25, reqStats: { jump: 60 }, desc: "高难度的三周跳。" },
+  { id: 'j_3a', name: '阿克塞尔三周 (3A)', type: 'jump_solo', baseScore: 8.0, cost: 18, risk: 0.40, reqStats: { jump: 75 }, desc: "王牌级别的三周半。" },
+  { id: 'j_4t', name: '后外点冰四周 (4T)', type: 'jump_solo', baseScore: 9.5, cost: 25, risk: 0.50, reqStats: { jump: 85 }, desc: "四周跳时代的入场券。" },
+  { id: 'j_4lz', name: '勾手四周 (4Lz)', type: 'jump_solo', baseScore: 11.5, cost: 30, risk: 0.65, reqStats: { jump: 95 }, desc: "人类极限难度的单跳。" },
+
+  // --- Combo Jumps (Higher Cost) ---
+  { id: 'c_base', name: '基础连跳', type: 'jump_combo', baseScore: 2.0, cost: 5, risk: 0.0, reqStats: {}, desc: "简单的连续跳跃。" },
+  { id: 'c_3t2t', name: '3T + 2T', type: 'jump_combo', baseScore: 5.5, cost: 15, risk: 0.10, reqStats: { jump: 45, endurance: 20 }, desc: "稳健的连跳组合。" },
+  { id: 'c_3lz3t', name: '3Lz + 3T', type: 'jump_combo', baseScore: 10.1, cost: 28, risk: 0.35, reqStats: { jump: 70, endurance: 45 }, desc: "经典的顶级连跳配置。" },
+  { id: 'c_4t3t', name: '4T + 3T', type: 'jump_combo', baseScore: 13.7, cost: 40, risk: 0.55, reqStats: { jump: 88, endurance: 65 }, desc: "极高体能消耗的冲冠配置。" },
+  { id: 'c_4lz3t', name: '4Lz + 3T', type: 'jump_combo', baseScore: 15.7, cost: 50, risk: 0.70, reqStats: { jump: 98, endurance: 80 }, desc: "只有传奇才能驾驭的神技。" },
+
+  // --- Spins ---
+  { id: 's_upright', name: '直立旋转 (Lv1)', type: 'spin', baseScore: 1.5, cost: 4, risk: 0.0, reqStats: {}, desc: "基础旋转动作。" },
+  { id: 's_camel', name: '燕式旋转 (Lv2)', type: 'spin', baseScore: 2.3, cost: 8, risk: 0.1, reqStats: { spin: 30 }, desc: "优美但需要核心力量。" },
+  { id: 's_sit', name: '蹲踞旋转 (Lv3)', type: 'spin', baseScore: 3.0, cost: 12, risk: 0.2, reqStats: { spin: 60 }, desc: "考验柔韧性的进阶旋转。" },
+  { id: 's_combo', name: '联合旋转 (Lv4)', type: 'spin', baseScore: 4.0, cost: 18, risk: 0.3, reqStats: { spin: 85 }, desc: "包含换足与姿态变化的顶级旋转。" },
+
+  // --- Steps ---
+  { id: 'st_simple', name: '基础滑行', type: 'step', baseScore: 1.5, cost: 5, risk: 0.0, reqStats: {}, desc: "简单的连接步伐。" },
+  { id: 'st_straight', name: '直线接续步 (Lv2)', type: 'step', baseScore: 2.6, cost: 12, risk: 0.1, reqStats: { step: 35 }, desc: "覆盖冰场的直线行进。" },
+  { id: 'st_circular', name: '圆形接续步 (Lv3)', type: 'step', baseScore: 3.3, cost: 18, risk: 0.2, reqStats: { step: 65 }, desc: "利用冰面宽度的弧线组合。" },
+  { id: 'st_complex', name: '复杂接续步 (Lv4)', type: 'step', baseScore: 4.5, cost: 25, risk: 0.3, reqStats: { step: 90 }, desc: "极高密度与覆盖率的满级步法。" },
+
+  // --- Choreo (High Endurance Scaling) ---
+  { id: 'ch_pose', name: '定点亮相', type: 'choreo', baseScore: 2.0, cost: 5, risk: 0.0, reqStats: {}, desc: "简单的结束动作。" },
+  { id: 'ch_standard', name: '标准编排', type: 'choreo', baseScore: 3.5, cost: 15, risk: 0.1, reqStats: { perf: 30 }, desc: "完整的燕式巡场。" },
+  { id: 'ch_emotional', name: '情感爆发', type: 'choreo', baseScore: 5.0, cost: 25, risk: 0.3, reqStats: { perf: 60, endurance: 40 }, desc: "与音乐融为一体的激情演绎。" },
+  { id: 'ch_master', name: '不朽杰作', type: 'choreo', baseScore: 7.0, cost: 40, risk: 0.5, reqStats: { perf: 90, endurance: 75 }, desc: "震撼全场的历史级表演。" },
+];
 
 export const TRAINING_TASKS: Record<string, TrainingTaskDefinition> = {
   jump: { id: 'jump', name: '四周跳', color: 'bg-red-600', targetAttr: 'jump', baseGain: 1.2, staCost: 22, desc: "突破极限 (消耗大)" },
