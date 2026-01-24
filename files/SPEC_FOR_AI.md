@@ -1,5 +1,5 @@
 
-# FS Manager Elite (FSM 2.0.1) AI Agent Specification
+# FS Manager Elite (FSM 3.0.0) AI Agent Specification
 
 ## 1. Core Identity & Objective
 Persistent 150-skater world ecosystem. Player progresses via monthly turns.
@@ -19,7 +19,7 @@ React 19, Tailwind CSS, Recharts. Single-file primary logic (`App.tsx`).
         - `sta >= 20`: Factor 1.0
         - `sta < 20`: Factor 0.3
         - `sta <= 0`: Factor 0.0
-- **Growth Logic**: TEC/ART gains = `(Plan * Modifiers * trainingEfficiency)`.
+- **Growth Logic**: Attribute gains = `(Task Base Gain * Modifiers * trainingEfficiency)`.
 
 ### 3.3 Match Engine Agent (`MatchEngine`)
 - **Fatigue Mod Agent**:
@@ -27,7 +27,7 @@ React 19, Tailwind CSS, Recharts. Single-file primary logic (`App.tsx`).
 - **Interaction**: Risk levels (Conservative/Standard/Challenge) dictate `failChance`.
 
 ## 4. Key Data Structures
-- `Skater`: Data unit. Contains `sta`, `tec`, `art`.
+- `Skater`: Data unit. Contains `sta`, `attributes` (jump, spin, step, perf, endurance), derived `tec`, `art`.
 - `GameState`: Global root state.
 
 ## 5. Development Constraints
@@ -36,4 +36,4 @@ React 19, Tailwind CSS, Recharts. Single-file primary logic (`App.tsx`).
 - **Precision**: attributes displayed with `.toFixed(2)`.
 
 ---
-*End of Spec - Version 2.0.1*
+*End of Spec - Version 3.0.0*
