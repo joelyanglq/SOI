@@ -613,6 +613,7 @@ const App: React.FC = () => {
         <div className="col-span-3 space-y-6">
           <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 shadow-2xl relative overflow-hidden group min-h-[500px] flex flex-col">
             <h2 className="text-3xl font-black text-white italic tracking-tighter mb-2">{game.skater.name}</h2>
+            <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-[0.2em]">年龄: {game.skater.age.toFixed(1)} 岁</p>
             <p className="text-[10px] text-slate-500 mb-6 font-bold uppercase tracking-[0.2em]">节目: {game.skater.activeProgram.name}</p>
             
             <div className="flex-1 relative -mx-8 -my-4">
