@@ -13,12 +13,21 @@ export interface HonorRecord {
   points: number;
 }
 
+export interface PlayerAttributes {
+  jump: number;
+  spin: number;
+  step: number;
+  perf: number; // Renamed from aura
+  endurance: number;
+}
+
 export interface Skater {
   name: string;
   age: number;
-  tec: number;
-  art: number;
-  sta: number;
+  tec: number; // Calculated from attributes for player, raw for AI
+  art: number; // Calculated from attributes for player, raw for AI
+  sta: number; // Global Stamina Resource
+  attributes?: PlayerAttributes; // Only for player
   pointsCurrent: number;
   pointsLast: number;
   rolling?: number;
@@ -38,9 +47,13 @@ export interface Equipment {
   name: string;
   type: 'skate' | 'blade' | 'costume';
   price: number;
-  tecBonus: number;
-  artBonus: number;
-  staBonus: number;
+  // 5D Bonus System
+  jumpBonus: number;
+  spinBonus: number;
+  stepBonus: number;
+  perfBonus: number;
+  enduranceBonus: number;
+  
   owned: boolean;
   lifespan: number; 
   maxLifespan: number;
@@ -85,22 +98,26 @@ export interface RandomEvent {
   effect: {
     money?: number;
     fame?: number;
-    tec?: number;
-    art?: number;
     sta?: number;
     injuryMonths?: number;
+    // 5D Attribute Effects
+    jump?: number;
+    spin?: number;
+    step?: number;
+    perf?: number;
+    endurance?: number;
   };
   type: 'positive' | 'negative' | 'neutral';
 }
 
-export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'art' | 'physical' | 'rest';
+export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
 
 export interface TrainingTaskDefinition {
   id: TrainingTaskType;
   name: string;
   color: string;
-  tec: number;
-  art: number;
+  targetAttr?: keyof PlayerAttributes;
+  baseGain: number;
   staCost: number; // positive = cost, negative = gain
   desc: string;
 }
