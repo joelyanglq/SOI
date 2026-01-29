@@ -162,8 +162,8 @@ export interface LogEntry {
   month: number;
 }
 
-// New Match Engine Types
-export type MatchPhaseType = 'jump_solo' | 'jump_combo' | 'spin' | 'step' | 'choreo';
+// New Match Engine Types - ISU Compliant
+export type MatchPhaseType = 'jump_solo' | 'jump_combo' | 'jump_axel' | 'spin1' | 'spin2' | 'spin3' | 'step';
 
 export interface MatchAction {
   id: string;
@@ -182,3 +182,15 @@ export interface MatchStructure {
   desc: string;
   phases: MatchPhaseType[];
 }
+
+// Program Configuration for Competition
+export interface ProgramElement {
+  phase: MatchPhaseType;
+  actionId: string;
+}
+
+export interface ProgramConfig {
+  elements: ProgramElement[]; // Ordered list of elements
+}
+
+export type ConfigStrategy = 'conservative' | 'balanced' | 'aggressive' | 'custom';

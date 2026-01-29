@@ -5,12 +5,12 @@ import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis 
 } from 'recharts';
 import { 
-  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType, PlayerAttributes, MatchAction, MatchPhaseType 
+  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType, PlayerAttributes, MatchAction, MatchPhaseType, ProgramConfig, ConfigStrategy, ProgramElement 
 } from './types';
 import { 
   SURNAME, GIVEN, COACHES, CITIES, RANDOM_EVENTS, EQUIP_NAMES, CHOREO_NAMES,
   MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS,
-  ACTION_LIBRARY, MATCH_STRUCTURES, PHASE_META
+  ACTION_LIBRARY, MATCH_STRUCTURES, PHASE_META, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk
 } from './constants';
 
 const randNormal = (mean = 0, sd = 1) => {
@@ -54,61 +54,81 @@ const getBestActionForStats = (phase: MatchPhaseType, stats: PlayerAttributes): 
   return validActions.sort((a,b) => b.baseScore - a.baseScore)[0];
 };
 
-// 2. Unified Score Calculator
+// 2. ISU-Compliant Score Calculator (Base Value + GOE)
 const calculateActionScore = (
   action: MatchAction, 
   stats: PlayerAttributes, 
   currentSta: number, 
   isPlayer: boolean
-): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number } => {
+): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number, goe: number } => {
   
-  // Stamina Cost
+  // Stamina Cost (Endurance reduces cost by up to 40%)
   const end = stats.endurance || 30;
   const costReduction = end / 250; 
   const realCost = Math.max(1, action.cost * (1 - costReduction));
 
-  // Attribute Average
+  // Relevant Attribute Average
   const meta = PHASE_META[action.type];
   let attrSum = 0;
   meta.relevantAttrs.forEach(k => { attrSum += (stats[k] || 0); });
   const attrAvg = attrSum / meta.relevantAttrs.length;
 
-  // Failure Chance
+  // Failure Chance (Based on risk and attributes)
   const baseFailChance = clamp((action.risk * 100) - (attrAvg * 0.6), 2, 90);
-  // AI fails less often to simulate consistency, player has normal risk
-  const failChance = isPlayer ? baseFailChance : baseFailChance * 0.4;
+  const failChance = isPlayer ? baseFailChance : baseFailChance * 0.4; // AI more consistent
   const isFail = Math.random() * 100 < failChance;
 
-  // Fatigue
+  // Fatigue Factor (Stamina < 30 affects execution)
   let fatigueFactor = 1.0;
-  if (currentSta < 15) fatigueFactor = 0.5;
-  else if (currentSta < 30) fatigueFactor = 0.8;
+  if (currentSta < 15) fatigueFactor = 0.6;
+  else if (currentSta < 30) fatigueFactor = 0.85;
 
-  // --- SCORING FORMULA CALIBRATION (REBALANCED) ---
-  // New Balance Goal:
-  // Beginner (Attr 35, Base 1.5) -> 3 actions -> ~40-50 pts total.
-  // Pro (Attr 60, Base 4.0) -> 3 actions -> ~100-120 pts total.
-  // Elite (Attr 80, Base 8.0) -> 3 actions -> ~180-200 pts total.
+  // --- ISU SCORING SYSTEM: BV + GOE ---
+  // Base Value from ISU Scale of Values (already in action.baseScore)
+  const baseValue = action.baseScore;
   
-  // New Weights: High Base Multiplier, Low Attribute Multiplier
-  // This ensures Difficulty matters more than just raw stats.
-  let rawScore = (action.baseScore * 6.0) + (attrAvg * 0.2);
+  // GOE Calculation (-5 to +5, mapped to percentage of BV)
+  // ISU GOE Scale: Each grade = ~10% of BV (simplified)
+  let goeGrade = 0; // -5 to +5
   
-  // Example Waltz (1.0, Attr 35): 6.0 + 7.0 = 13.0 pts.
-  // Example 2A (3.3, Attr 40): 19.8 + 8.0 = 27.8 pts.
-  
-  let goeMod = 1.0;
   if (isFail) {
-    goeMod = 0.5; // Fall penalty
+    // Fall: -5 GOE (worst execution)
+    goeGrade = -5;
   } else {
-    // GOE Bonus for exceeding requirements
-    const overhead = Math.max(0, attrAvg - 60);
-    goeMod = 1.0 + (Math.random() * 0.1) + (overhead * 0.003); 
+    // Calculate execution quality based on attributes and fatigue
+    // Perfect: attrAvg 80+, no fatigue -> +5 GOE
+    // Good: attrAvg 60+, slight fatigue -> +2 to +4 GOE
+    // Average: attrAvg 40-60 -> 0 to +2 GOE
+    // Below: attrAvg < 40 -> -1 to +1 GOE
+    
+    const skillFactor = (attrAvg - 40) / 12; // -3.33 to +5 range for attr 0-100
+    const fatiguePenalty = (1 - fatigueFactor) * -8; // Up to -1.6 for very tired
+    const randomness = (Math.random() - 0.5) * 1.5; // ±0.75 variance
+    
+    goeGrade = clamp(skillFactor + fatiguePenalty + randomness, -4, 5);
   }
+  
+  // GOE Value: Each grade = 10% of BV (ISU approximation)
+  const goeValue = baseValue * (goeGrade * 0.10);
+  
+  // Final Element Score = BV + GOE
+  const elementScore = baseValue + goeValue;
+  
+  // Add PCS-like component based on perf attribute (simplified)
+  // In real ISU: TES (Technical) + PCS (Program Component) = Total
+  // Here we add a small perf bonus to simulate PCS contribution per element
+  const pcsBonus = (stats.perf || 30) * 0.03; // ~0.9 to 3.0 bonus
+  
+  const finalScore = Math.max(0, elementScore + pcsBonus);
 
-  const finalScore = rawScore * goeMod * fatigueFactor;
-
-  return { score: finalScore, cost: realCost, isFail, fatigueFactor, raw: rawScore };
+  return { 
+    score: finalScore, 
+    cost: realCost, 
+    isFail, 
+    fatigueFactor, 
+    raw: baseValue,
+    goe: goeGrade 
+  };
 };
 
 // 3. AI Simulation Logic
@@ -1073,7 +1093,7 @@ const App: React.FC = () => {
 };
 
 const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skater[], onClose: (results: any[]) => void }> = ({ event, skater, aiSkaters, onClose }) => {
-  const [stage, setStage] = useState<'intro' | 'active' | 'results'>('intro');
+  const [stage, setStage] = useState<'intro' | 'config' | 'active' | 'results'>('intro');
   const [phaseIndex, setPhaseIndex] = useState(0); 
   const [participants, setParticipants] = useState<any[]>([]);
   const [commentary, setCommentary] = useState<string>("广播中：下一位选手请进入场地...");
@@ -1081,9 +1101,23 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
   const [playerMatchSta, setPlayerMatchSta] = useState(0);
   const [playerAccumulatedScore, setPlayerAccumulatedScore] = useState(0);
   const [history, setHistory] = useState<{name: string, score: number, desc: string, phaseName: string}[]>([]);
+  
+  // Program Configuration State
+  const [programConfig, setProgramConfig] = useState<ProgramConfig>({ elements: [] });
+  const [configStrategy, setConfigStrategy] = useState<ConfigStrategy>('balanced');
+  const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const matchTemplate = MATCH_STRUCTURES[event.template] || MATCH_STRUCTURES['low'];
   const phases = matchTemplate.phases;
+  
+  // Initialize with balanced config
+  useEffect(() => {
+    if (programConfig.elements.length === 0 && skater.attributes) {
+      const initialConfig = generateProgramConfig(skater.attributes, phases, 'balanced');
+      setProgramConfig(initialConfig);
+    }
+  }, []);
 
   useEffect(() => {
     // 1. Filter valid AI
@@ -1122,10 +1156,19 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
     setIsProcessing(false);
   }, []);
 
-  const handleActionSelect = async (action: MatchAction) => {
+  const executeConfiguredAction = async () => {
     if (isProcessing) return;
+    
+    const currentElement = programConfig.elements[phaseIndex];
+    const action = getActionFromElement(currentElement);
+    
+    if (!action) {
+      console.error('No action configured for element:', currentElement);
+      return;
+    }
+    
     setIsProcessing(true);
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 800));
 
     // Use unified scoring calculation
     const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true);
@@ -1139,16 +1182,39 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
     setHistory(prev => [...prev, {
         name: action.name,
         score: finalScore,
-        desc: result.isFail ? "出现失误 (Fall)" : (result.fatigueFactor < 1 ? "体力不支 (Fatigued)" : "完美发挥 (Clean)"),
+        desc: result.isFail ? `摔倒 (GOE -5)` : `GOE ${result.goe > 0 ? '+' : ''}${result.goe.toFixed(1)}`,
         phaseName: PHASE_META[action.type].name
     }]);
 
-    if (phaseIndex < phases.length - 1) {
+    if (phaseIndex < programConfig.elements.length - 1) {
         setPhaseIndex(prev => prev + 1);
         setIsProcessing(false);
     } else {
         finishMatch(playerAccumulatedScore + finalScore);
     }
+  };
+  
+  // Drag and drop handlers
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+  
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+    
+    const newElements = [...programConfig.elements];
+    const draggedElement = newElements[draggedIndex];
+    newElements.splice(draggedIndex, 1);
+    newElements.splice(index, 0, draggedElement);
+    
+    setProgramConfig({ elements: newElements });
+    setDraggedIndex(index);
+    setConfigStrategy('custom');
+  };
+  
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
   };
 
   const finishMatch = (finalPlayerScore: number) => {
@@ -1166,22 +1232,10 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
 
   const sorted = [...participants].sort((a,b) => b.score - a.score);
   const playerRank = sorted.findIndex(r => r.isPlayer) + 1;
-  const currentPhaseType = phases[phaseIndex];
-  const phaseMeta = PHASE_META[currentPhaseType];
-  
-  const availableActions = ACTION_LIBRARY.filter(a => {
-      if (a.type !== currentPhaseType) return false;
-      const reqs = a.reqStats;
-      for (const [key, val] of Object.entries(reqs)) {
-          // @ts-ignore
-          if ((skater.attributes?.[key] || 0) < val) return false;
-      }
-      return true;
-  });
-
-  if (availableActions.length === 0 && stage === 'active') {
-     availableActions.push({ id: 'fallback', name: '基础滑行', type: currentPhaseType, baseScore: 1.0, cost: 2, risk: 0, reqStats: {}, desc: '能力不足时的临时动作' });
-  }
+  const currentElement = stage === 'active' && programConfig.elements.length > phaseIndex 
+    ? programConfig.elements[phaseIndex] 
+    : programConfig.elements[0];
+  const phaseMeta = currentElement ? PHASE_META[currentElement.phase] : PHASE_META['jump_solo'];
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-950/98 backdrop-blur-3xl flex items-center justify-center p-8 animate-in fade-in duration-500 overflow-hidden text-slate-200 font-sans">
@@ -1193,17 +1247,157 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
               <div className="flex-1 flex flex-col justify-center items-center text-center animate-in zoom-in duration-500">
                 <h2 className="text-6xl font-black text-white italic mb-8 tracking-tighter uppercase">入冰仪式</h2>
                 <div className="max-w-md text-slate-400 text-sm mb-12 leading-relaxed">{matchTemplate.desc}</div>
-                <button onClick={() => setStage('active')} className="bg-blue-600 hover:bg-blue-500 px-24 py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95 text-white">开始比赛</button>
+                <button onClick={() => setStage('config')} className="bg-blue-600 hover:bg-blue-500 px-24 py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95 text-white">配置节目</button>
               </div>
             )}
+
+            {stage === 'config' && skater.attributes && (
+              <div className="flex-1 flex flex-col animate-in fade-in duration-300">
+                <h2 className="text-3xl font-black text-white italic mb-2 tracking-tighter">节目配置</h2>
+                <p className="text-xs text-slate-500 mb-6">选择策略或自定义每个技术要素的动作</p>
+
+                {/* Strategy Selection */}
+                <div className="grid grid-cols-3 gap-4 mb-8">
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('conservative');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'conservative'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'conservative' ? 'bg-emerald-900/30 border-emerald-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">🛡️</div>
+                    <h3 className="text-lg font-black text-white mb-1">保守策略</h3>
+                    <p className="text-xs text-slate-500">优先稳定，降低失误风险</p>
+                    <p className="text-xs text-emerald-400 mt-2 font-bold">失误率 ≤ 25%</p>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('balanced');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'balanced'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'balanced' ? 'bg-blue-900/30 border-blue-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">⚖️</div>
+                    <h3 className="text-lg font-black text-white mb-1">默认策略</h3>
+                    <p className="text-xs text-slate-500">平衡难度与成功率</p>
+                    <p className="text-xs text-blue-400 mt-2 font-bold">失误率 ≤ 40%</p>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('aggressive');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'aggressive'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'aggressive' ? 'bg-red-900/30 border-red-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">⚡</div>
+                    <h3 className="text-lg font-black text-white mb-1">激进策略</h3>
+                    <p className="text-xs text-slate-500">冲击最高难度分数</p>
+                    <p className="text-xs text-red-400 mt-2 font-bold">追求极限BV</p>
+                  </button>
+                </div>
+
+                {/* Config Summary */}
+                <div className="grid grid-cols-2 gap-4 mb-6 p-6 bg-slate-950 rounded-2xl border border-slate-800">
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">总基础分 (BV)</p>
+                    <p className="text-3xl font-black text-blue-400">{calculateConfigTotalBV(programConfig).toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">平均风险</p>
+                    <p className={`text-3xl font-black ${calculateConfigAvgRisk(programConfig) > 0.4 ? 'text-red-400' : calculateConfigAvgRisk(programConfig) > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {(calculateConfigAvgRisk(programConfig) * 100).toFixed(0)}%
+                    </p>
+                  </div>
+                </div>
+
+                {/* Element List with Drag and Drop */}
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <h3 className="text-xs font-black uppercase text-slate-500 mb-2 tracking-widest">技术要素配置</h3>
+                  <p className="text-xs text-slate-600 mb-4">拖动调整执行顺序</p>
+                  <div className="space-y-3">
+                    {programConfig.elements.map((element, idx) => {
+                      const action = getActionFromElement(element);
+                      const phaseMeta = PHASE_META[element.phase];
+                      
+                      return (
+                        <div 
+                          key={idx}
+                          draggable
+                          onDragStart={() => handleDragStart(idx)}
+                          onDragOver={(e) => handleDragOver(e, idx)}
+                          onDragEnd={handleDragEnd}
+                          className={`bg-slate-950 border-2 rounded-2xl p-4 transition-all cursor-move hover:border-blue-500/50 ${
+                            draggedIndex === idx ? 'opacity-50 scale-95' : 'opacity-100'
+                          } ${draggedIndex !== null && draggedIndex !== idx ? 'border-slate-700' : 'border-slate-800'}`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-600 font-black text-sm min-w-[24px]">#{idx + 1}</span>
+                              <span className="text-2xl">{phaseMeta.icon}</span>
+                              <div>
+                                <h4 className="text-sm font-black text-white">{phaseMeta.name}</h4>
+                                <p className="text-xs text-slate-500">{action?.name || '未配置'}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setEditingElementIndex(idx)}
+                              className="text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg transition-all"
+                            >
+                              调整
+                            </button>
+                          </div>
+                          {action && (
+                            <div className="flex gap-4 text-xs mt-3 pt-3 border-t border-slate-800/50">
+                              <div>
+                                <span className="text-slate-600">BV:</span>
+                                <span className="text-blue-400 font-bold ml-1">{action.baseScore.toFixed(1)}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-600">失误率:</span>
+                                <span className={`font-bold ml-1 ${action.risk > 0.4 ? 'text-red-400' : action.risk > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {(action.risk * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-600">体力:</span>
+                                <span className="text-slate-300 font-bold ml-1">{action.cost}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Bottom Actions */}
+                <div className="flex gap-4 mt-6 pt-6 border-t border-slate-800">
+                  <button
+                    onClick={() => setStage('intro')}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-white px-8 py-4 rounded-2xl font-black transition-all"
+                  >
+                    返回
+                  </button>
+                  <button
+                    onClick={() => setStage('active')}
+                    className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-black text-xl transition-all active:scale-95"
+                  >
+                    确认配置 · 开始比赛
+                  </button>
+                </div>
+              </div>
+            )}
+
             {stage === 'active' && (
               <div className="animate-in fade-in duration-300 w-full flex flex-col h-full">
                  <div className="flex items-center justify-between mb-8 px-4 relative">
                     <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-slate-800 -z-0"></div>
-                    {phases.map((p, idx) => {
+                    {programConfig.elements.map((elem, idx) => {
                         const isPast = idx < phaseIndex;
                         const isCurrent = idx === phaseIndex;
-                        const pMeta = PHASE_META[p];
+                        const pMeta = PHASE_META[elem.phase];
                         return (
                             <div key={idx} className={`relative z-10 flex flex-col items-center transition-all duration-500 ${isCurrent ? 'scale-110' : 'scale-90 opacity-60'}`}>
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg border-4 transition-colors ${isPast ? 'bg-emerald-500 border-emerald-600 text-white' : isCurrent ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(59,130,246,0.5)]' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
@@ -1230,43 +1424,61 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
                     </div>
                  </div>
 
-                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">可用技术动作 ({availableActions.length})</p>
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {availableActions.map(action => {
-                            // Pre-calculate to show preview
-                            // Note: This is just a preview, actual calculation repeats inside handler for security/consistency
-                            // We use a temp call to get cost
-                            const preview = calculateActionScore(action, skater.attributes!, playerMatchSta, true);
-                            const isTooExpensive = playerMatchSta < preview.cost;
-                            
-                            return (
-                                <button 
-                                    key={action.id} 
-                                    disabled={isProcessing} 
-                                    onClick={() => handleActionSelect(action)} 
-                                    className={`relative group text-left p-5 rounded-2xl border-2 transition-all overflow-hidden ${isTooExpensive ? 'border-red-900/30 bg-red-900/5 hover:border-red-500/50' : 'border-slate-800 bg-slate-950 hover:border-blue-500 hover:shadow-lg active:scale-[0.98]'}`}
-                                >
-                                   <div className="flex justify-between items-start mb-2 relative z-10">
-                                       <span className="font-black text-white text-lg">{action.name}</span>
-                                       <span className="font-mono text-xs font-bold text-emerald-400 bg-emerald-900/20 px-2 py-1 rounded">预计: {preview.score.toFixed(1)}</span>
-                                   </div>
-                                   <p className="text-[10px] text-slate-500 mb-4 relative z-10">{action.desc}</p>
-                                   <div className="flex gap-4 border-t border-slate-800/50 pt-3 relative z-10">
-                                       <div className="flex flex-col">
-                                           <span className="text-[8px] font-black text-slate-600 uppercase">体力消耗</span>
-                                           <span className={`text-xs font-black ${isTooExpensive ? 'text-red-500' : 'text-slate-300'}`}>{preview.cost.toFixed(0)}</span>
-                                       </div>
-                                       <div className="flex flex-col">
-                                           <span className="text-[8px] font-black text-slate-600 uppercase">失误风险</span>
-                                           <span className={`text-xs font-black ${action.risk > 0.4 ? 'text-amber-500' : 'text-slate-300'}`}>{(action.risk * 100).toFixed(0)}%</span>
-                                       </div>
-                                   </div>
-                                   {isTooExpensive && <div className="absolute inset-0 bg-red-500/5 pointer-events-none"></div>}
-                                </button>
-                            );
-                        })}
-                     </div>
+                 <div className="flex-1 flex flex-col items-center justify-center">
+                     {(() => {
+                       const currentElement = programConfig.elements[phaseIndex];
+                       if (!currentElement) return <p className="text-red-400">配置错误</p>;
+                       
+                       const currentAction = getActionFromElement(currentElement);
+                       if (!currentAction) return <p className="text-red-400">动作未找到</p>;
+                       
+                       const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true);
+                       
+                       return (
+                         <div className="w-full max-w-xl animate-in zoom-in duration-500">
+                           <div className="bg-gradient-to-br from-slate-900 to-slate-950 border-2 border-blue-500/50 rounded-3xl p-10 shadow-2xl">
+                             <div className="text-center mb-8">
+                               <div className="text-6xl mb-4">{PHASE_META[currentElement.phase].icon}</div>
+                               <h3 className="text-4xl font-black text-white mb-2">{currentAction.name}</h3>
+                               <p className="text-sm text-slate-400">{currentAction.desc}</p>
+                             </div>
+                             
+                             <div className="grid grid-cols-4 gap-4 mb-8">
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">基础分</p>
+                                 <p className="text-2xl font-black text-blue-400">{currentAction.baseScore.toFixed(1)}</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">体力消耗</p>
+                                 <p className={`text-2xl font-black ${playerMatchSta < preview.cost ? 'text-red-400' : 'text-slate-300'}`}>{preview.cost.toFixed(0)}</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">失误率</p>
+                                 <p className={`text-2xl font-black ${currentAction.risk > 0.4 ? 'text-amber-400' : 'text-emerald-400'}`}>{(currentAction.risk * 100).toFixed(0)}%</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">预计GOE</p>
+                                 <p className={`text-2xl font-black ${preview.goe > 2 ? 'text-emerald-400' : preview.goe < 0 ? 'text-red-400' : 'text-slate-300'}`}>{preview.goe > 0 ? '+' : ''}{preview.goe.toFixed(1)}</p>
+                               </div>
+                             </div>
+                             
+                             {isProcessing ? (
+                               <div className="text-center py-8">
+                                 <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                                 <p className="text-sm text-slate-400 animate-pulse">执行中...</p>
+                               </div>
+                             ) : (
+                               <button
+                                 onClick={executeConfiguredAction}
+                                 className="w-full bg-blue-600 hover:bg-blue-500 text-white py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95"
+                               >
+                                 执行动作
+                               </button>
+                             )}
+                           </div>
+                         </div>
+                       );
+                     })()}
                  </div>
 
                  <div className="mt-6">
@@ -1298,18 +1510,24 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
                 <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-[0.4em] mb-6">动作回放</h3>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
                     {history.length === 0 && <p className="text-center text-slate-600 text-xs py-10 italic">比赛即将开始...</p>}
-                    {history.map((h, i) => (
-                        <div key={i} className="bg-slate-950 border border-slate-800 p-4 rounded-2xl animate-in slide-in-from-right-2">
-                            <div className="flex justify-between items-center mb-1">
-                                <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">{h.phaseName}</span>
-                                <span className="font-mono text-emerald-400 font-bold">+{h.score.toFixed(2)}</span>
+                    {history.map((h, i) => {
+                        const isFall = h.desc.includes('摔倒');
+                        const goeMatch = h.desc.match(/GOE ([+-]?\d+\.?\d*)/);
+                        const goeValue = goeMatch ? parseFloat(goeMatch[1]) : 0;
+                        
+                        return (
+                            <div key={i} className={`border p-4 rounded-2xl animate-in slide-in-from-right-2 ${isFall ? 'bg-red-950/20 border-red-900/50' : 'bg-slate-950 border-slate-800'}`}>
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">{h.phaseName}</span>
+                                    <span className="font-mono text-emerald-400 font-bold">+{h.score.toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between items-end">
+                                    <span className="font-bold text-white text-sm">{h.name}</span>
+                                    <span className={`text-[9px] font-bold ${isFall ? 'text-red-400' : goeValue > 3 ? 'text-emerald-400' : 'text-slate-500'}`}>{h.desc}</span>
+                                </div>
                             </div>
-                            <div className="flex justify-between items-end">
-                                <span className="font-bold text-white text-sm">{h.name}</span>
-                                <span className="text-[9px] text-slate-500 italic">{h.desc}</span>
-                            </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
              </div>
 
@@ -1324,8 +1542,93 @@ const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skate
                     ))}
                 </div>
              </div>
-        </div>
+         </div>
       </div>
+      
+      {/* Edit Action Modal */}
+      {editingElementIndex !== null && skater.attributes && (
+        <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-300">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-4xl w-full max-h-[80vh] overflow-y-auto custom-scrollbar shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-2xl font-black text-white">
+                  {PHASE_META[programConfig.elements[editingElementIndex].phase].name} - 选择动作
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">点击选择要执行的技术动作</p>
+              </div>
+              <button
+                onClick={() => setEditingElementIndex(null)}
+                className="text-slate-500 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-slate-800 transition-all"
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {ACTION_LIBRARY.filter(a => a.type === programConfig.elements[editingElementIndex].phase).map(action => {
+                const isAvailable = Object.entries(action.reqStats).every(
+                  ([key, val]) => (skater.attributes![key as keyof PlayerAttributes] || 0) >= val
+                );
+                const isSelected = programConfig.elements[editingElementIndex].actionId === action.id;
+                
+                return (
+                  <button
+                    key={action.id}
+                    disabled={!isAvailable}
+                    onClick={() => {
+                      const newElements = [...programConfig.elements];
+                      newElements[editingElementIndex] = {
+                        ...newElements[editingElementIndex],
+                        actionId: action.id
+                      };
+                      setProgramConfig({ elements: newElements });
+                      setConfigStrategy('custom');
+                      setEditingElementIndex(null);
+                    }}
+                    className={`text-left p-5 rounded-2xl border-2 transition-all ${
+                      !isAvailable 
+                        ? 'opacity-40 cursor-not-allowed bg-slate-950 border-slate-800' 
+                        : isSelected
+                        ? 'bg-blue-900/30 border-blue-500 shadow-lg'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-600 hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <span className={`font-black text-lg ${isAvailable ? 'text-white' : 'text-slate-600'}`}>
+                        {action.name}
+                        {isSelected && <span className="ml-2 text-xs text-blue-400">✓ 已选</span>}
+                      </span>
+                      <span className={`font-mono text-xs font-bold px-2 py-1 rounded ${isAvailable ? 'text-blue-400 bg-blue-900/20' : 'text-slate-600 bg-slate-800'}`}>
+                        BV: {action.baseScore.toFixed(1)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">{action.desc}</p>
+                    
+                    <div className="flex gap-4 text-xs border-t border-slate-800/50 pt-3">
+                      <div>
+                        <span className="text-slate-600">体力:</span>
+                        <span className={`font-bold ml-1 ${isAvailable ? 'text-slate-300' : 'text-slate-600'}`}>{action.cost}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-600">失误率:</span>
+                        <span className={`font-bold ml-1 ${!isAvailable ? 'text-slate-600' : action.risk > 0.4 ? 'text-red-400' : action.risk > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                          {(action.risk * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                    
+                    {!isAvailable && (
+                      <div className="mt-3 text-xs text-red-400 font-bold">
+                        需求: {Object.entries(action.reqStats).map(([k, v]) => `${k} ≥ ${v}`).join(', ')}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
