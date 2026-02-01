@@ -71,12 +71,22 @@ export interface Coach {
 export interface Sponsorship {
   id: string;
   name: string;
-  type: 'brand' | 'local' | 'global';
+  // Tier indicates brand scale/quality. Duration is independent.
+  tier: 'local' | 'brand' | 'global';
   duration: number;
-  monthlyPay: number;
+  paymentType: 'monthly' | 'lump-sum';
+
+  // Payment fields: depending on paymentType only one of these is expected to be used.
   signingBonus: number;
+  monthlyPay?: number;
+  totalPay?: number;
+
   minFame: number;
   remainingMonths: number;
+
+  // Optional metadata
+  discount?: number;
+  isRenewal?: boolean;
 }
 
 export interface GameEvent {
