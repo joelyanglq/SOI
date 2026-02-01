@@ -356,7 +356,7 @@ const App: React.FC = () => {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [sponsorOptions, setSponsorOptions] = useState<Sponsorship[]>([]);
   const [showSponsorshipModal, setShowSponsorshipModal] = useState(false);
-  const [sponsorshipModalMode, setSponsorshipModalMode] = useState<'initial' | 'expired' | 'renew'>('initial');
+  const [sponsorshipModalMode, setSponsorshipModalMode] = useState<'selection' | 'expired'>('selection');
   const [sponsorshipRenewalOptions, setSponsorshipRenewalOptions] = useState<Sponsorship[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<'event' | 'development' | 'ranking' | 'career'>('event');
@@ -646,26 +646,26 @@ const App: React.FC = () => {
     });
     setIsProcessing(false);
     addLog(`进入 ${game.month === 12 ? game.year + 1 : game.year} 年 ${game.month === 12 ? 1 : game.month + 1} 月`, 'sys');
-  };
 
-  // 监听赞助到期事件
-  useEffect(() => {
-    if (isNaming) {
-      previousSponsorRef.current = null;
-      return;
-    }
-    
-    // 检测赞助从有变为无（即到期）
-    if (previousSponsorRef.current && !game.activeSponsor && sponsorshipModalMode !== 'initial' && !showSponsorshipModal) {
-      const renewalOpts = generateRenewalOptions(previousSponsorRef.current);
-      setSponsorshipRenewalOptions(renewalOpts);
-      setSponsorOptions(generateSponsorshipOptions(game.fame));
-      setSponsorshipModalMode('expired');
-      setShowSponsorshipModal(true);
-    }
-    
-    previousSponsorRef.current = game.activeSponsor || null;
-  }, [game.activeSponsor, isNaming, sponsorshipModalMode, showSponsorshipModal]);
+    // 回合结束后检查赞助：若无赞助或已到期，触发选择窗口
+    setTimeout(() => {
+      setGame(prev => {
+        if (!prev.activeSponsor) {
+          setSponsorshipModalMode('selection');
+          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setShowSponsorshipModal(true);
+        } else if (prev.activeSponsor.remainingMonths <= 0) {
+          // 合同已到期，显示续期选项
+          const renewalOpts = generateRenewalOptions(prev.activeSponsor);
+          setSponsorshipRenewalOptions(renewalOpts);
+          setSponsorshipModalMode('expired');
+          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setShowSponsorshipModal(true);
+        }
+        return prev;
+      });
+    }, 100);
+  };
 
   const selectSponsor = (sp: Sponsorship) => {
     setGame(prev => ({ 
@@ -715,15 +715,6 @@ const App: React.FC = () => {
 
   const [showMatch, setShowMatch] = useState<{ event: GameEvent, idx: number } | null>(null);
   const previousSponsorRef = useRef<Sponsorship | null>(null);
-
-  // 初始化时检查是否需要选赞助
-  useEffect(() => {
-    if (!isNaming && !game.activeSponsor && sponsorOptions.length === 0 && sponsorshipModalMode === 'initial') {
-      setSponsorshipModalMode('initial');
-      setShowSponsorshipModal(true);
-      setSponsorOptions(generateSponsorshipOptions(game.fame));
-    }
-  }, [isNaming, game.activeSponsor]);
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
@@ -1199,10 +1190,10 @@ const App: React.FC = () => {
             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"></div>
             
             <h2 className="text-3xl font-black text-white italic mb-2 uppercase tracking-tighter text-center">
-              {sponsorshipModalMode === 'initial' ? '选择赞助商' : '赞助合约已到期'}
+              {sponsorshipModalMode === 'selection' ? '选择赞助商' : '赞助合约已到期'}
             </h2>
             <p className="text-[10px] text-slate-400 text-center mb-8 uppercase tracking-widest">
-              {sponsorshipModalMode === 'initial' 
+              {sponsorshipModalMode === 'selection' 
                 ? '为你的职业生涯寻找合适的赞助商' 
                 : '续期现有合作或寻找新的赞助机会'}
             </p>
