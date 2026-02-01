@@ -759,6 +759,7 @@ const App: React.FC = () => {
         <div className="col-span-3 space-y-6">
           <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 shadow-2xl relative overflow-hidden group min-h-[500px] flex flex-col">
             <h2 className="text-3xl font-black text-white italic tracking-tighter mb-2">{game.skater.name}</h2>
+            <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-[0.2em]">年龄: {game.skater.age.toFixed(1)} 岁</p>
             <p className="text-[10px] text-slate-500 mb-6 font-bold uppercase tracking-[0.2em]">节目: {game.skater.activeProgram.name}</p>
             
             <div className="flex-1 relative -mx-8 -my-4">
@@ -977,6 +978,84 @@ const App: React.FC = () => {
                 <div className="flex gap-4 mb-4">{[ { k: 'profile', l: '档案' }, { k: 'honors', l: '荣誉' }, { k: 'stats', l: '趋势' } ].map(s => (
                     <button key={s.k} onClick={() => setCareerSubTab(s.k as any)} className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${careerSubTab === s.k ? 'bg-white text-slate-950 shadow-lg' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}>{s.l}</button>
                 ))}</div>
+
+                {careerSubTab === 'honors' && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
+                    <div className="p-6 bg-slate-800/30 border-b border-slate-800 flex justify-between items-center">
+                       <h3 className="text-xs font-black uppercase text-white tracking-widest">生涯荣誉记录簿</h3>
+                       <span className="text-[10px] text-slate-500 italic">仅记录重大赛事前三及常规赛冠军</span>
+                    </div>
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-800/50 text-[10px] font-black uppercase text-slate-500 tracking-widest">
+                          <th className="px-8 py-6">年份/月</th>
+                          <th className="px-8 py-6">赛事全称</th>
+                          <th className="px-8 py-6">名次成绩</th>
+                          <th className="px-8 py-6 text-right">获得积分</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {game.skater.honors.slice().reverse().map((h, i) => (
+                          <tr key={i} className="hover:bg-slate-800/30 transition-all group">
+                            <td className="px-8 py-5 text-sm font-mono text-slate-400 group-hover:text-white transition-colors">{h.year}.{h.month}</td>
+                            <td className="px-8 py-5 text-sm font-bold text-white italic tracking-tight">{h.eventName}</td>
+                            <td className="px-8 py-5">
+                               <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-lg ${h.rank === 1 ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30' : h.rank === 2 ? 'bg-slate-300 text-slate-900' : h.rank === 3 ? 'bg-orange-800 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                 {h.rank === 1 ? '🥇 Winner' : h.rank === 2 ? '🥈 Silver' : h.rank === 3 ? '🥉 Bronze' : `Rank ${h.rank}`}
+                               </span>
+                            </td>
+                            <td className="px-8 py-5 text-right font-mono font-black text-blue-400 text-sm">+{h.points.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {game.skater.honors.length === 0 && (
+                       <div className="py-32 text-center opacity-30 italic text-sm">记录簿上一片空白，等待你的首枚奖牌...</div>
+                    )}
+                  </div>
+                )}
+
+                {careerSubTab === 'stats' && (
+                  <div className="space-y-6">
+                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
+                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">能力演化轨迹 (保留两位小数)</h3>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={game.history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis stroke="#475569" fontSize={9} axisLine={false} tickLine={false} domain={[0, 100]} />
+                            <Tooltip
+                               formatter={(v: any) => Number(v).toFixed(2)}
+                               contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }}
+                            />
+                            <Legend />
+                            <Area type="monotone" dataKey="tec" name="技术能力(TEC)" stroke="#3b82f6" strokeWidth={3} fill="#3b82f622" dot={false} />
+                            <Area type="monotone" dataKey="art" name="艺术感悟(ART)" stroke="#a855f7" strokeWidth={3} fill="#a855f722" dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
+                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">商业价值趋势(ISU积分 / 核心名望)</h3>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={game.history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="left" stroke="#3b82f6" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" fontSize={9} axisLine={false} tickLine={false} />
+                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }} />
+                            <Legend />
+                            <Area yAxisId="left" type="stepAfter" dataKey="rank" name="世界排名总分" stroke="#3b82f6" strokeWidth={2} fill="#3b82f611" dot={false} />
+                            <Area yAxisId="right" type="monotone" dataKey="fame" name="公众影响力" stroke="#f59e0b" strokeWidth={2} fill="#f59e0b11" dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {careerSubTab === 'profile' && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
