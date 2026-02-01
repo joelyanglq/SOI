@@ -100,6 +100,27 @@ const generateSponsorshipOptions = (fame: number): Sponsorship[] => {
   return options;
 };
 
+const generateRenewalOptions = (currentSponsor: Sponsorship): Sponsorship[] => {
+  // 续期选项：保留原赞助商，提供折扣
+  const renewalOptions: Sponsorship[] = [];
+  const durations = [12, 24, 36];
+  for (const duration of durations) {
+    const discountRate = 0.85; // 15% 折扣
+    renewalOptions.push({
+      id: `renewal_${Date.now()}_${duration}`,
+      name: currentSponsor.name,
+      type: currentSponsor.type,
+      duration,
+      remainingMonths: duration,
+      signingBonus: Math.floor(currentSponsor.signingBonus * discountRate) + (duration > 12 ? 10000 : 0), // 额外续约奖励
+      monthlyPay: Math.floor(currentSponsor.monthlyPay * discountRate),
+      minFame: currentSponsor.minFame,
+      isRenewal: true
+    });
+  }
+  return renewalOptions;
+};
+
 const generateMarket = (activeCoachId: string | null = null, currentMarket: any = null) => {
   const newCoaches = COACHES.map(c => ({
     ...c,
@@ -198,6 +219,9 @@ const App: React.FC = () => {
   const [loadingQuote, setLoadingQuote] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [sponsorOptions, setSponsorOptions] = useState<Sponsorship[]>([]);
+  const [showSponsorshipModal, setShowSponsorshipModal] = useState(false);
+  const [sponsorshipModalMode, setSponsorshipModalMode] = useState<'initial' | 'expired' | 'renew'>('initial');
+  const [sponsorshipRenewalOptions, setSponsorshipRenewalOptions] = useState<Sponsorship[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<'event' | 'development' | 'ranking' | 'career'>('event');
   const [devSubTab, setDevSubTab] = useState<'train' | 'coach' | 'equip' | 'choreo'>('train');
@@ -485,10 +509,41 @@ const App: React.FC = () => {
     addLog(`进入 ${game.month === 12 ? game.year + 1 : game.year} 年 ${game.month === 12 ? 1 : game.month + 1} 月`, 'sys');
   };
 
+  // 监听赞助到期事件
+  useEffect(() => {
+    if (isNaming) {
+      previousSponsorRef.current = null;
+      return;
+    }
+    
+    // 检测赞助从有变为无（即到期）
+    if (previousSponsorRef.current && !game.activeSponsor && sponsorshipModalMode !== 'initial' && !showSponsorshipModal) {
+      const renewalOpts = generateRenewalOptions(previousSponsorRef.current);
+      setSponsorshipRenewalOptions(renewalOpts);
+      setSponsorOptions(generateSponsorshipOptions(game.fame));
+      setSponsorshipModalMode('expired');
+      setShowSponsorshipModal(true);
+    }
+    
+    previousSponsorRef.current = game.activeSponsor || null;
+  }, [game.activeSponsor, isNaming, sponsorshipModalMode, showSponsorshipModal]);
+
   const selectSponsor = (sp: Sponsorship) => {
     setGame(prev => ({ ...prev, activeSponsor: sp, money: prev.money + sp.signingBonus }));
-    setSponsorOptions([]); 
+    setSponsorOptions([]);
+    setShowSponsorshipModal(false);
+    setSponsorshipRenewalOptions([]);
     addLog(`签约赞助: ${sp.name}`, 'sys');
+  };
+
+  const handleSponsorshipModalClose = (selectedSponsor?: Sponsorship) => {
+    if (selectedSponsor) {
+      selectSponsor(selectedSponsor);
+    } else {
+      // 关闭模态框但不选择
+      setShowSponsorshipModal(false);
+      setSponsorshipRenewalOptions([]);
+    }
   };
 
   const buyItem = (item: Equipment) => {
@@ -516,6 +571,16 @@ const App: React.FC = () => {
   };
 
   const [showMatch, setShowMatch] = useState<{ event: GameEvent, idx: number } | null>(null);
+  const previousSponsorRef = useRef<Sponsorship | null>(null);
+
+  // 初始化时检查是否需要选赞助
+  useEffect(() => {
+    if (!isNaming && !game.activeSponsor && sponsorOptions.length === 0 && sponsorshipModalMode === 'initial') {
+      setSponsorshipModalMode('initial');
+      setShowSponsorshipModal(true);
+      setSponsorOptions(generateSponsorshipOptions(game.fame));
+    }
+  }, [isNaming, game.activeSponsor]);
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
@@ -979,6 +1044,111 @@ const App: React.FC = () => {
 
       {game.activeEvent && (
         <div className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500"><div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"><div className={`absolute top-0 left-0 w-full h-1.5 ${game.activeEvent.event.type === 'positive' ? 'bg-emerald-500' : game.activeEvent.event.type === 'negative' ? 'bg-red-500' : 'bg-blue-500'}`}></div><h2 className="text-3xl font-black text-white italic mb-6 uppercase tracking-tighter text-center">{game.activeEvent.event.name}</h2><div className="bg-slate-950/50 p-8 rounded-[2rem] mb-8 text-left italic text-slate-300 font-serif text-sm leading-relaxed border border-slate-800">"{game.activeEvent.narrative}"</div><div className="mb-10 space-y-3"><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-center mb-4">属性变动</p><div className="grid grid-cols-2 gap-3">{Object.entries(game.activeEvent.event.effect).map(([key, val]) => { if (val === 0) return null; const labelMap: any = { tec: 'TEC', art: 'ART', sta: 'STA', money: '资金', fame: '名望', injuryMonths: '伤病', jump: 'JUMP', spin: 'SPIN', step: 'STEP', perf: 'PERF', endurance: 'END' }; const isPositive = (val as number) > 0; return ( <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 flex justify-between items-center"><span className="text-[10px] font-bold text-slate-400">{labelMap[key] || key}</span><span className={`font-black text-xs ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>{(val as number) > 0 ? '+' : ''}{val}</span></div> ); })}</div></div><button onClick={() => setGame(prev => ({ ...prev, activeEvent: null }))} className="w-full bg-white text-slate-950 py-5 rounded-2xl font-black text-xl active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认</button></div></div>
+      )}
+
+      {showSponsorshipModal && (
+        <div className="fixed inset-0 z-[210] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500">
+          <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"></div>
+            
+            <h2 className="text-3xl font-black text-white italic mb-2 uppercase tracking-tighter text-center">
+              {sponsorshipModalMode === 'initial' ? '选择赞助商' : '赞助合约已到期'}
+            </h2>
+            <p className="text-[10px] text-slate-400 text-center mb-8 uppercase tracking-widest">
+              {sponsorshipModalMode === 'initial' 
+                ? '为你的职业生涯寻找合适的赞助商' 
+                : '续期现有合作或寻找新的赞助机会'}
+            </p>
+
+            {sponsorshipModalMode === 'expired' && sponsorshipRenewalOptions.length > 0 && (
+              <div className="mb-8 bg-slate-950/50 border border-blue-500/20 rounded-2xl p-6">
+                <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-4">💎 续期选项 (原赞助商享折扣)</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {sponsorshipRenewalOptions.map(renewal => (
+                    <button
+                      key={renewal.id}
+                      onClick={() => handleSponsorshipModalClose(renewal)}
+                      className="p-4 bg-slate-900 border-2 border-blue-500/30 hover:border-blue-500 rounded-2xl transition-all hover:scale-105 text-left group"
+                    >
+                      <p className="text-sm font-black text-white mb-2 group-hover:text-blue-400">{renewal.name}</p>
+                      <div className="space-y-1 text-[9px] text-slate-400">
+                        <p>周期: <span className="text-blue-400 font-bold">{renewal.duration}月</span></p>
+                        <p>签约金: <span className="text-emerald-400 font-bold">¥{renewal.signingBonus.toLocaleString()}</span></p>
+                        <p>月薪: <span className="text-emerald-400 font-bold">¥{renewal.monthlyPay.toLocaleString()}</span></p>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-slate-800">
+                        <span className="text-[8px] font-black text-amber-400">优惠15% + 续约奖励</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
+                {sponsorshipModalMode === 'expired' ? '其他赞助选项' : '可选赞助商'}
+              </p>
+              <div className="space-y-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                {sponsorOptions.map(sp => {
+                  const disabled = game.fame < sp.minFame;
+                  return (
+                    <button
+                      key={sp.id}
+                      disabled={disabled}
+                      onClick={() => handleSponsorshipModalClose(sp)}
+                      className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${
+                        disabled
+                          ? 'bg-slate-950 border-slate-800 opacity-40 cursor-not-allowed'
+                          : 'bg-slate-950 border-slate-800 hover:border-purple-500 hover:scale-102'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-sm font-black text-white">{sp.name}</span>
+                        <span className={`text-[8px] font-black uppercase px-2 py-1 rounded ${
+                          sp.type === 'local' ? 'bg-slate-700 text-slate-300' :
+                          sp.type === 'brand' ? 'bg-blue-600/30 text-blue-400' :
+                          'bg-purple-600/30 text-purple-400'
+                        }`}>
+                          {sp.type === 'local' ? '本地' : sp.type === 'brand' ? '品牌' : '国际'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 text-[9px] text-slate-400 mb-3">
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">周期</p>
+                          <p className="text-white font-bold">{sp.duration}月</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">签约</p>
+                          <p className="text-emerald-400 font-bold">¥{sp.signingBonus.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">月薪</p>
+                          <p className="text-emerald-400 font-bold">¥{sp.monthlyPay.toLocaleString()}</p>
+                        </div>
+                      </div>
+                      {disabled && (
+                        <p className="text-[8px] text-red-500 font-bold uppercase">需名望: {sp.minFame}</p>
+                      )}
+                    </button>
+                  );
+                })}
+                {sponsorOptions.length === 0 && (
+                  <p className="text-xs text-slate-600 text-center py-10 italic">暂无可用赞助商</p>
+                )}
+              </div>
+            </div>
+
+            {sponsorshipModalMode !== 'initial' && (
+              <button
+                onClick={() => handleSponsorshipModalClose()}
+                className="mt-8 w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-300 rounded-2xl font-black text-sm uppercase tracking-widest transition-all"
+              >
+                暂时跳过
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       {showMatch && (
