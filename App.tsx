@@ -165,13 +165,19 @@ const generateInitialAI = (): Skater[] => {
     const tier = i < 15 ? 'elite' : i < 50 ? 'pro' : 'rookie';
     const baseStat = tier === 'elite' ? 80 : tier === 'pro' ? 60 : 35;
     
-    // Simulate initial points based on their tier capability in a standard match
-    const mockStats = { jump: baseStat, spin: baseStat, step: baseStat, perf: baseStat, endurance: baseStat };
-    const mockSkaterForSim: any = { tec: baseStat, art: baseStat, attributes: mockStats };
-    const oneMatchScore = simulateAIProgram(mockSkaterForSim, 'mid'); 
-    
-    // Annual points roughly = 2 major events + 2 minor (~3.5 matches)
-    const initialPoints = Math.floor(oneMatchScore * (tier === 'elite' ? 25 : tier === 'pro' ? 10 : 2));
+    // Initial points based on ISU real-world rankings
+    // Elite (Top 15): ~3500-5500 pts, Pro (16-50): ~1500-3500 pts, Rookie (51-150): ~200-1500 pts
+    let initialPoints = 0;
+    if (tier === 'elite') {
+      // Top 15: simulate world top skaters (3500-5500 range, declining with rank)
+      initialPoints = Math.floor(5500 - (i * 133) + (Math.random() - 0.5) * 300);
+    } else if (tier === 'pro') {
+      // Rank 16-50: mid-level professionals (1500-3500 range)
+      initialPoints = Math.floor(3500 - ((i - 15) * 57) + (Math.random() - 0.5) * 200);
+    } else {
+      // Rank 51-150: rookies and developing skaters (200-1500 range)
+      initialPoints = Math.floor(1500 - ((i - 50) * 13) + (Math.random() - 0.5) * 150);
+    }
 
     const s = {
       id: `ai_${Date.now()}_${i}`,
@@ -391,20 +397,25 @@ const App: React.FC = () => {
   const seasonCalendar = useMemo(() => {
     const cal: Record<number, GameEvent[]> = {};
     for (let m = 1; m <= 12; m++) cal[m] = [];
-    cal[12].push({ name: "全国锦标赛", base: 90, pts: 1800, req: 800, max: 24, prize: 30000, template: 'mid' });
-    cal[3].push({ name: "世锦赛", base: 120, pts: 5000, req: 4000, max: 24, prize: 50000, template: 'high' });
+    // 全国锦标赛 (等同于ISU四大洲/欧锦赛: 840分)
+    cal[12].push({ name: "全国锦标赛", base: 90, pts: 840, req: 600, max: 24, prize: 30000, template: 'mid' });
+    // 世界锦标赛 (ISU World Championships: 1200分)
+    cal[3].push({ name: "世锦赛", base: 120, pts: 1200, req: 1500, max: 24, prize: 50000, template: 'high' });
+    // 冬季奥运会 (ISU Olympics: 1200分)
     if (game.year % 4 === OLYMPIC_BASE_YEAR % 4) {
-      cal[2].push({ name: "冬季奥运会", base: 140, pts: 12000, req: 10000, max: 30, prize: 150000, template: 'high' });
+      cal[2].push({ name: "冬季奥运会", base: 140, pts: 1200, req: 2500, max: 30, prize: 150000, template: 'high' });
     }
+    // 大奖赛系列 (ISU Grand Prix: 400分/站, GPF: 800分)
     const regularEvents = [
-        { m: 10, name: "大奖赛·北美站", req: 2500, pts: 1200 },
-        { m: 11, name: "大奖赛·日本站", req: 3000, pts: 1200 },
-        { m: 11, name: "大奖赛·总决赛", req: 6000, pts: 3000 },
+        { m: 10, name: "大奖赛·北美站", req: 1000, pts: 400 },
+        { m: 11, name: "大奖赛·日本站", req: 1200, pts: 400 },
+        { m: 11, name: "大奖赛·总决赛", req: 2000, pts: 800 },
     ];
     regularEvents.forEach(e => cal[e.m].push({ name: e.name, base: 70, pts: e.pts, req: e.req, max: 12, prize: 10000, template: e.m === 11 && e.name.includes("总决赛") ? 'high' : 'mid' }));
+    // 挑战赛系列 (ISU Challenger Series: 300分)
     for (let m = 1; m <= 12; m++) {
         if (cal[m].length === 0) {
-            cal[m].push({ name: `${CITIES[m % CITIES.length]} 挑战赛`, base: 35, pts: 600, req: 0, max: 12, prize: 2000, template: 'low' });
+            cal[m].push({ name: `${CITIES[m % CITIES.length]} 挑战赛`, base: 35, pts: 300, req: 0, max: 12, prize: 2000, template: 'low' });
         }
     }
     return cal;
