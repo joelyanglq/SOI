@@ -56,12 +56,15 @@ interface PlayerAttributes {
 - **spin**: 影响旋转动作的等级和稳定性
 - **step**: 影响接续步的质量和GOE加分
 - **perf**: 影响艺术编排得分和PCS加成
-- **endurance**: 减少体力消耗（最多减少50%），提升训练效率（最多+20%）
+- **endurance**: 减少体力消耗（训练50%/比赛40%），提升训练效率（最多+20%），影响衍生属性计算
 
-**衍生属性**
+**衍生属性**（加权计算）
 ```typescript
-tec: number = (jump + spin + step) / 3     // 技术能力
-art: number = (perf + step) / 2            // 艺术感悟
+// 技术能力（跳跃占40%，旋转30%，步法20%，耐力10%）
+tec: number = (jump × 0.4) + (spin × 0.3) + (step × 0.2) + (endurance × 0.1)
+
+// 艺术感悟（表现力占50%，步法30%，耐力20%）
+art: number = (perf × 0.5) + (step × 0.3) + (endurance × 0.2)
 ```
 
 **成长机制**
@@ -93,8 +96,13 @@ skater: {
 
 - **比赛消耗**：参赛消耗 5-20 点（基于耐力减免）
   ```typescript
-  finalStaCost = baseStaCost × (1 - endurance / 200)
+  // 训练系统（50%减免）
+  trainingStaCost = baseStaCost × (1 - endurance / 200)
   // 耐力100时可减少50%消耗
+  
+  // 比赛系统（40%减免）
+  matchStaCost = baseStaCost × (1 - endurance / 250)
+  // 耐力100时可减少40%消耗
   ```
 
 **体力影响**
@@ -104,9 +112,10 @@ skater: {
 
 #### 1.3 训练计划系统
 
-**每周4格训练槽**
+**每周7格训练槽**
 ```typescript
-schedule: TrainingTaskType[];  // ['jump', 'spin', 'rest', 'perf']
+schedule: TrainingTaskType[];  // 长度为7的数组
+// 示例: ['jump', 'spin', 'rest', 'perf', 'endurance', 'step', 'rest']
 ```
 
 **训练任务表**
@@ -656,7 +665,7 @@ interface GameState {
   fame: number;          // 名望值
   
   // 训练系统
-  schedule: TrainingTaskType[];  // 本周训练计划（4格）
+  schedule: TrainingTaskType[];  // 本周训练计划（7格）
   
   // 比赛系统
   hasCompeted: boolean;  // 本月是否已比赛
@@ -1231,6 +1240,8 @@ SOI/
 - ✅ 拖拽排序节目配置
 - ✅ 三种自动配置策略
 - ✅ AI生态模拟系统
+- ✅ 每周7格训练槽位
+- ✅ 加权衍生属性系统（包含耐力影响）
 
 **v2.0.0**
 - 五维属性系统
@@ -1246,6 +1257,7 @@ SOI/
 ---
 
 **文档编写日期**: 2026年1月29日  
+**文档更新日期**: 2026年2月8日（修正训练系统和衍生属性描述）  
 **游戏版本**: v3.0.0  
 **ISU规则版本**: 2024-25赛季
 
