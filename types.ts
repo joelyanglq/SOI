@@ -86,6 +86,7 @@ export interface GameEvent {
   req: number;
   max: number;
   prize?: number;
+  template: string; // 'low' | 'mid' | 'high'
   _simulated?: boolean;
 }
 
@@ -160,3 +161,36 @@ export interface LogEntry {
   type: LogType;
   month: number;
 }
+
+// New Match Engine Types - ISU Compliant
+export type MatchPhaseType = 'jump_solo' | 'jump_combo' | 'jump_axel' | 'spin1' | 'spin2' | 'spin3' | 'step';
+
+export interface MatchAction {
+  id: string;
+  name: string;
+  type: MatchPhaseType;
+  baseScore: number;
+  cost: number;
+  risk: number; // 0-1 base failure chance
+  reqStats: Partial<PlayerAttributes>; // Requirements to unlock
+  desc: string;
+}
+
+export interface MatchStructure {
+  id: string;
+  name: string;
+  desc: string;
+  phases: MatchPhaseType[];
+}
+
+// Program Configuration for Competition
+export interface ProgramElement {
+  phase: MatchPhaseType;
+  actionId: string;
+}
+
+export interface ProgramConfig {
+  elements: ProgramElement[]; // Ordered list of elements
+}
+
+export type ConfigStrategy = 'conservative' | 'balanced' | 'aggressive' | 'custom';

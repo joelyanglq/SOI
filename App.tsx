@@ -5,11 +5,12 @@ import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis 
 } from 'recharts';
 import { 
-  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType, PlayerAttributes 
+  Skater, GameState, LogEntry, LogType, GameEvent, Equipment, Coach, RandomEvent, Sponsorship, HonorRecord, TrainingTaskType, PlayerAttributes, MatchAction, MatchPhaseType, ProgramConfig, ConfigStrategy, ProgramElement 
 } from './types';
 import { 
   SURNAME, GIVEN, COACHES, CITIES, RANDOM_EVENTS, EQUIP_NAMES, CHOREO_NAMES,
-  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS 
+  MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, LOADING_QUOTES, COMMENTARY_CORPUS, EVENT_NARRATIVES, TRAINING_TASKS,
+  ACTION_LIBRARY, MATCH_STRUCTURES, PHASE_META, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk
 } from './constants';
 
 const randNormal = (mean = 0, sd = 1) => {
@@ -32,29 +33,164 @@ const calcDerivedStats = (attrs: PlayerAttributes) => {
   return { tec: clamp(tec), art: clamp(art) };
 };
 
+// --- CORE SCORING ENGINE ---
+
+// 1. Helper to find the best action an AI/Player can perform in a phase
+const getBestActionForStats = (phase: MatchPhaseType, stats: PlayerAttributes): MatchAction => {
+  const validActions = ACTION_LIBRARY.filter(a => {
+    if (a.type !== phase) return false;
+    for (const [key, val] of Object.entries(a.reqStats)) {
+      // @ts-ignore
+      if ((stats[key] || 0) < val) return false;
+    }
+    return true;
+  });
+
+  if (validActions.length === 0) {
+    // Fallback: easiest action
+    return ACTION_LIBRARY.find(a => a.type === phase) || ACTION_LIBRARY[0];
+  }
+  // AI picks the highest base score action available to them
+  return validActions.sort((a,b) => b.baseScore - a.baseScore)[0];
+};
+
+// 2. ISU-Compliant Score Calculator (Base Value + GOE)
+const calculateActionScore = (
+  action: MatchAction, 
+  stats: PlayerAttributes, 
+  currentSta: number, 
+  isPlayer: boolean
+): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number, goe: number } => {
+  
+  // Stamina Cost (Endurance reduces cost by up to 40%)
+  const end = stats.endurance || 30;
+  const costReduction = end / 250; 
+  const realCost = Math.max(1, action.cost * (1 - costReduction));
+
+  // Relevant Attribute Average
+  const meta = PHASE_META[action.type];
+  let attrSum = 0;
+  meta.relevantAttrs.forEach(k => { attrSum += (stats[k] || 0); });
+  const attrAvg = attrSum / meta.relevantAttrs.length;
+
+  // Failure Chance (Based on risk and attributes)
+  const baseFailChance = clamp((action.risk * 100) - (attrAvg * 0.6), 2, 90);
+  const failChance = isPlayer ? baseFailChance : baseFailChance * 0.4; // AI more consistent
+  const isFail = Math.random() * 100 < failChance;
+
+  // Fatigue Factor (Stamina < 30 affects execution)
+  let fatigueFactor = 1.0;
+  if (currentSta < 15) fatigueFactor = 0.6;
+  else if (currentSta < 30) fatigueFactor = 0.85;
+
+  // --- ISU SCORING SYSTEM: BV + GOE ---
+  // Base Value from ISU Scale of Values (already in action.baseScore)
+  const baseValue = action.baseScore;
+  
+  // GOE Calculation (-5 to +5, mapped to percentage of BV)
+  // ISU GOE Scale: Each grade = ~10% of BV (simplified)
+  let goeGrade = 0; // -5 to +5
+  
+  if (isFail) {
+    // Fall: -5 GOE (worst execution)
+    goeGrade = -5;
+  } else {
+    // Calculate execution quality based on attributes and fatigue
+    // Perfect: attrAvg 80+, no fatigue -> +5 GOE
+    // Good: attrAvg 60+, slight fatigue -> +2 to +4 GOE
+    // Average: attrAvg 40-60 -> 0 to +2 GOE
+    // Below: attrAvg < 40 -> -1 to +1 GOE
+    
+    const skillFactor = (attrAvg - 40) / 12; // -3.33 to +5 range for attr 0-100
+    const fatiguePenalty = (1 - fatigueFactor) * -8; // Up to -1.6 for very tired
+    const randomness = (Math.random() - 0.5) * 1.5; // ±0.75 variance
+    
+    goeGrade = clamp(skillFactor + fatiguePenalty + randomness, -4, 5);
+  }
+  
+  // GOE Value: Each grade = 10% of BV (ISU approximation)
+  const goeValue = baseValue * (goeGrade * 0.10);
+  
+  // Final Element Score = BV + GOE
+  const elementScore = baseValue + goeValue;
+  
+  // Add PCS-like component based on perf attribute (simplified)
+  // In real ISU: TES (Technical) + PCS (Program Component) = Total
+  // Here we add a small perf bonus to simulate PCS contribution per element
+  const pcsBonus = (stats.perf || 30) * 0.03; // ~0.9 to 3.0 bonus
+  
+  const finalScore = Math.max(0, elementScore + pcsBonus);
+
+  return { 
+    score: finalScore, 
+    cost: realCost, 
+    isFail, 
+    fatigueFactor, 
+    raw: baseValue,
+    goe: goeGrade 
+  };
+};
+
+// 3. AI Simulation Logic
+const simulateAIProgram = (skater: Skater, templateId: string): number => {
+  const template = MATCH_STRUCTURES[templateId] || MATCH_STRUCTURES['low'];
+  
+  // Map generic AI stats to detailed attributes if missing
+  const stats: PlayerAttributes = skater.attributes || {
+    jump: skater.tec,
+    spin: skater.tec,
+    step: (skater.tec + skater.art) / 2,
+    perf: skater.art,
+    endurance: skater.tec * 0.9 // AI usually has good endurance
+  };
+
+  let totalScore = 0;
+  let currentSta = 100;
+
+  template.phases.forEach(phase => {
+    const bestAction = getBestActionForStats(phase, stats);
+    const res = calculateActionScore(bestAction, stats, currentSta, false);
+    totalScore += res.score;
+    currentSta -= res.cost;
+  });
+
+  // Small random variance for judging (±5%)
+  return totalScore * (0.95 + Math.random() * 0.1);
+};
+
+// --- END CORE SCORING ENGINE ---
+
 const generateInitialAI = (): Skater[] => {
   return Array.from({ length: 150 }).map((_, i) => {
-    // Distribute stats to create different tiers of skaters
     const tier = i < 15 ? 'elite' : i < 50 ? 'pro' : 'rookie';
-    const baseStat = tier === 'elite' ? 75 : tier === 'pro' ? 55 : 30;
+    const baseStat = tier === 'elite' ? 80 : tier === 'pro' ? 60 : 35;
+    
+    // Initial points based on ISU real-world rankings
+    // Elite (Top 15): ~3500-5500 pts, Pro (16-50): ~1500-3500 pts, Rookie (51-150): ~200-1500 pts
+    let initialPoints = 0;
+    if (tier === 'elite') {
+      // Top 15: simulate world top skaters (3500-5500 range, declining with rank)
+      initialPoints = Math.floor(5500 - (i * 133) + (Math.random() - 0.5) * 300);
+    } else if (tier === 'pro') {
+      // Rank 16-50: mid-level professionals (1500-3500 range)
+      initialPoints = Math.floor(3500 - ((i - 15) * 57) + (Math.random() - 0.5) * 200);
+    } else {
+      // Rank 51-150: rookies and developing skaters (200-1500 range)
+      initialPoints = Math.floor(1500 - ((i - 50) * 13) + (Math.random() - 0.5) * 150);
+    }
+
     const s = {
       id: `ai_${Date.now()}_${i}`,
       name: SURNAME[Math.floor(Math.random() * SURNAME.length)] + GIVEN[Math.floor(Math.random() * GIVEN.length)],
       age: 15 + Math.random() * 12, 
-      tec: baseStat + Math.random() * 20, 
-      art: baseStat + Math.random() * 20, 
+      tec: baseStat + randNormal(0, 5), 
+      art: baseStat + randNormal(0, 5), 
       sta: 100,
       pointsCurrent: 0, 
-      // Seed elite players with high enough points to maintain their tier
-      pointsLast: tier === 'elite' ? 6000 + Math.random() * 4000 : (tier === 'pro' ? 2000 + Math.random() * 2000 : Math.random() * 1000), 
-      titles: [], 
-      honors: [], 
-      pQual: 1.0, 
-      pAge: 0, 
-      injuryMonths: 0, 
-      isPlayer: false, 
-      retired: false,
-      activeProgram: { name: "AI Program", baseArt: 35 + (tier === 'elite' ? 30 : 0), freshness: 100 }
+      pointsLast: initialPoints, 
+      titles: [], honors: [], pQual: 1.0, pAge: 0, injuryMonths: 0, 
+      isPlayer: false, retired: false,
+      activeProgram: { name: "AI Program", baseArt: 35, freshness: 100 }
     };
     return { ...s, rolling: calculateRolling(s) };
   });
@@ -110,11 +246,6 @@ const generateMarket = (activeCoachId: string | null = null, currentMarket: any 
     if (activeOne) newCoaches[0] = activeOne;
   }
   
-  // Generating Equipment with 5D stats
-  // Skate: Jump ++, Step +, Endurance +
-  // Blade: Spin ++, Step ++, Jump +
-  // Costume: Perf ++, Art (indirectly via perf/step)
-  
   const equipment: Equipment[] = [
     { 
       id: 'skate_' + Math.random().toString(36).substr(2, 9), 
@@ -159,7 +290,6 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('FS_MANAGER_V11_PRO');
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Migration: Ensure schedule and attributes exist
       if (!parsed.schedule) parsed.schedule = [...DEFAULT_SCHEDULE];
       if (!parsed.skater.attributes) {
         parsed.skater.attributes = {
@@ -170,13 +300,10 @@ const App: React.FC = () => {
           endurance: 40
         };
       } else if ('aura' in parsed.skater.attributes) {
-        // Migration from Aura to Perf
         parsed.skater.attributes.perf = parsed.skater.attributes.aura;
         delete parsed.skater.attributes.aura;
       }
-      // Migrate schedule tasks
       parsed.schedule = parsed.schedule.map((t: any) => t === 'aura' ? 'perf' : t);
-      
       return parsed;
     }
     const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
@@ -220,7 +347,6 @@ const App: React.FC = () => {
     }
   }, [game.activeSponsor, game.fame, isNaming]);
 
-  // Helper to calculate total attributes including equipment
   const getTotalAttributes = useCallback((base: PlayerAttributes, inventory: Equipment[]) => {
     let total = { ...base };
     inventory.forEach(item => {
@@ -232,7 +358,6 @@ const App: React.FC = () => {
             total.endurance += item.enduranceBonus || 0;
         }
     });
-    // clamp all
     (Object.keys(total) as (keyof PlayerAttributes)[]).forEach(k => {
         total[k] = clamp(total[k]);
     });
@@ -272,20 +397,25 @@ const App: React.FC = () => {
   const seasonCalendar = useMemo(() => {
     const cal: Record<number, GameEvent[]> = {};
     for (let m = 1; m <= 12; m++) cal[m] = [];
-    cal[12].push({ name: "全国锦标赛", base: 90, pts: 1800, req: 800, max: 24, prize: 30000 });
-    cal[3].push({ name: "世锦赛", base: 120, pts: 5000, req: 4000, max: 24, prize: 50000 });
+    // 全国锦标赛 (等同于ISU四大洲/欧锦赛: 840分)
+    cal[12].push({ name: "全国锦标赛", base: 90, pts: 840, req: 600, max: 24, prize: 30000, template: 'mid' });
+    // 世界锦标赛 (ISU World Championships: 1200分)
+    cal[3].push({ name: "世锦赛", base: 120, pts: 1200, req: 1500, max: 24, prize: 50000, template: 'high' });
+    // 冬季奥运会 (ISU Olympics: 1200分)
     if (game.year % 4 === OLYMPIC_BASE_YEAR % 4) {
-      cal[2].push({ name: "冬季奥运会", base: 140, pts: 12000, req: 10000, max: 30, prize: 150000 });
+      cal[2].push({ name: "冬季奥运会", base: 140, pts: 1200, req: 2500, max: 30, prize: 150000, template: 'high' });
     }
+    // 大奖赛系列 (ISU Grand Prix: 400分/站, GPF: 800分)
     const regularEvents = [
-        { m: 10, name: "大奖赛·北美站", req: 2500, pts: 1200 },
-        { m: 11, name: "大奖赛·日本站", req: 3000, pts: 1200 },
-        { m: 11, name: "大奖赛·总决赛", req: 6000, pts: 3000 },
+        { m: 10, name: "大奖赛·北美站", req: 1000, pts: 400 },
+        { m: 11, name: "大奖赛·日本站", req: 1200, pts: 400 },
+        { m: 11, name: "大奖赛·总决赛", req: 2000, pts: 800 },
     ];
-    regularEvents.forEach(e => cal[e.m].push({ name: e.name, base: 70, pts: e.pts, req: e.req, max: 12, prize: 10000 }));
+    regularEvents.forEach(e => cal[e.m].push({ name: e.name, base: 70, pts: e.pts, req: e.req, max: 12, prize: 10000, template: e.m === 11 && e.name.includes("总决赛") ? 'high' : 'mid' }));
+    // 挑战赛系列 (ISU Challenger Series: 300分)
     for (let m = 1; m <= 12; m++) {
         if (cal[m].length === 0) {
-            cal[m].push({ name: `${CITIES[m % CITIES.length]} 挑战赛`, base: 35, pts: 600, req: 0, max: 12, prize: 2000 });
+            cal[m].push({ name: `${CITIES[m % CITIES.length]} 挑战赛`, base: 35, pts: 300, req: 0, max: 12, prize: 2000, template: 'low' });
         }
     }
     return cal;
@@ -299,26 +429,18 @@ const App: React.FC = () => {
     let artPlanPoints = 0; 
 
     const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
-    // Endurance reduces stamina cost by up to 50%
     const enduranceCostReduction = currentEndurance / 200;
-    // Endurance improves training efficiency by up to 20%
     const enduranceEfficiencyBonus = currentEndurance / 500;
 
     for (const taskId of currentSchedule) {
       const task = TRAINING_TASKS[taskId];
-      
-      // Calculate adjusted stamina cost based on endurance
       const adjustedStaCost = task.staCost * (1 - enduranceCostReduction);
-      
-      // Calculate efficiency with endurance bonus
       let efficiency = 1.0 + enduranceEfficiencyBonus;
       if (tempSta <= 0) efficiency = 0;
       else if (tempSta < 20) efficiency = 0.3 + enduranceEfficiencyBonus;
-      efficiency = Math.min(efficiency, 1.2); // Cap efficiency at 120%
+      efficiency = Math.min(efficiency, 1.2);
 
       if (task.targetAttr) {
-        // TEC mod for jump/spin/step/endurance? ART mod for perf/step?
-        // Simplifying: TecMod applies to Jump/Spin/Endurance, ArtMod to Perf, Mixed to Step
         let coachMod = 1.0;
         if (['jump', 'spin', 'endurance'].includes(task.targetAttr)) coachMod = currentCoach.tecMod;
         else if (task.targetAttr === 'perf') coachMod = currentCoach.artMod;
@@ -326,9 +448,7 @@ const App: React.FC = () => {
 
         gains[task.targetAttr] += task.baseGain * coachMod * ageMod * efficiency;
       }
-      
       if (task.targetAttr === 'perf' || task.targetAttr === 'step') artPlanPoints += task.baseGain; 
-
       tempSta = clamp(tempSta - adjustedStaCost, 0, 100);
     }
     return { finalSta: tempSta, gains, artPlanPoints };
@@ -346,10 +466,8 @@ const App: React.FC = () => {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
       
-      // Calculate growth based on schedule
       const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance);
 
-      // Apply growth to attributes (Base Attributes)
       const currentBaseAttrs = { ...prev.skater.attributes! };
       const attrKeys = Object.keys(currentBaseAttrs) as (keyof PlayerAttributes)[];
       
@@ -363,12 +481,11 @@ const App: React.FC = () => {
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
 
       let updatedSkater = { ...prev.skater, 
-        attributes: currentBaseAttrs, // Storing base attributes
+        attributes: currentBaseAttrs,
         sta: finalSta,
         age: prev.skater.age + 0.083,
         activeProgram: { 
           ...prev.skater.activeProgram, 
-          // Adjust freshness based on intensity of art training roughly
           freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100) 
         }
       };
@@ -388,18 +505,14 @@ const App: React.FC = () => {
         const e = triggeredEvent.effect;
         if (e.money) moneyBonus += e.money;
         if (e.fame) fameBonus += e.fame;
-        
-        // Apply event effects to specific 5D attributes
         if (e.jump) updatedSkater.attributes!.jump = clamp(updatedSkater.attributes!.jump + e.jump, 0, 100);
         if (e.spin) updatedSkater.attributes!.spin = clamp(updatedSkater.attributes!.spin + e.spin, 0, 100);
         if (e.step) updatedSkater.attributes!.step = clamp(updatedSkater.attributes!.step + e.step, 0, 100);
         if (e.perf) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.perf, 0, 100);
         if (e.endurance) updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.endurance, 0, 100);
-
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
       }
 
-      // Final Calculation: Combined Base + Inventory -> Derived Tec/Art
       const totalAttrs = getTotalAttributes(updatedSkater.attributes!, remainingInventory);
       const derived = calcDerivedStats(totalAttrs);
       
@@ -412,36 +525,37 @@ const App: React.FC = () => {
       }
       updatedSkater.rolling = calculateRolling(updatedSkater);
 
-      const aiSkaters = prev.aiSkaters.map(ai => {
+      // --- NEW AI ECOSYSTEM LOGIC ---
+      // 1. Prepare AI Skaters (Aging, Growth, Retirement)
+      const aiCompetedIds = new Set<string>();
+      let workingAiSkaters = prev.aiSkaters.map(ai => {
         let aiUp = { ...ai, age: ai.age + 0.083 };
         if (aiUp.injuryMonths > 0) aiUp.injuryMonths -= 1;
-        if (prev.month === 12) { aiUp.pointsLast = aiUp.pointsCurrent; aiUp.pointsCurrent = 0; }
         
-        const currentMonthEvents = [...(seasonCalendar[prev.month] || [])].sort((a,b) => b.pts - a.pts);
-        const targetEvent = currentMonthEvents.find(ev => (aiUp.rolling || 0) >= ev.req);
-        
-        if (targetEvent && aiUp.injuryMonths === 0) {
-            const baseProb = aiUp.rolling! > 5000 ? 0.95 : 0.65;
-            if (Math.random() < baseProb) {
-                const totalStat = aiUp.tec + aiUp.art;
-                const skillFactor = clamp((200 - totalStat) / 200, 0, 1);
-                const biasedMean = (targetEvent.max * skillFactor * 0.7) + 1;
-                const rank = clamp(Math.floor(randNormal(biasedMean, targetEvent.max * 0.15)), 1, targetEvent.max);
-                aiUp.pointsCurrent += Math.floor(targetEvent.pts / (rank * 0.4 + 0.6));
-            }
-        }
+        // Stat Growth
         aiUp.tec = clamp(aiUp.tec + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
         aiUp.art = clamp(aiUp.art + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
+        
+        // Season Reset
+        if (prev.month === 12) { 
+            aiUp.pointsLast = aiUp.pointsCurrent; 
+            aiUp.pointsCurrent = 0; 
+        }
+        
+        // Calculate Rolling for qualification check
         aiUp.rolling = calculateRolling(aiUp);
 
+        // Retirement Check
         const shouldRetire = (aiUp.age > 33) || (aiUp.age > 28 && Math.random() < 0.05);
         if (shouldRetire) {
+          const newAiBaseStat = 35 + Math.random() * 20;
+          const newAiStats = { jump: newAiBaseStat, spin: newAiBaseStat, step: newAiBaseStat, perf: newAiBaseStat, endurance: newAiBaseStat };
           const newAi = {
             id: `ai_${Date.now()}_${Math.random()}`,
             name: SURNAME[Math.floor(Math.random() * SURNAME.length)] + GIVEN[Math.floor(Math.random() * GIVEN.length)],
             age: 14 + Math.random() * 2,
-            tec: 25 + Math.random() * 15,
-            art: 25 + Math.random() * 15,
+            tec: newAiBaseStat, art: newAiBaseStat,
+            attributes: newAiStats,
             sta: 100, isPlayer: false, retired: false,
             pointsLast: 0, pointsCurrent: 0, rolling: 0, titles: [], honors: [], pQual: 1, pAge: 0, injuryMonths: 0,
             activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 }
@@ -450,6 +564,59 @@ const App: React.FC = () => {
         }
         return aiUp;
       });
+
+      // 2. Event Grouping & Simulation
+      const currentMonthEvents = seasonCalendar[prev.month] || [];
+      const sortedEvents = [...currentMonthEvents].sort((a,b) => b.pts - a.pts);
+
+      sortedEvents.forEach(ev => {
+          // Identify Candidates (Who qualifies?)
+          let candidates = workingAiSkaters.filter(ai => 
+              !aiCompetedIds.has(ai.id) && 
+              ai.injuryMonths === 0
+          );
+
+          if (ev.req > 0) {
+             // Standard events: Must meet requirements
+             candidates = candidates.filter(ai => (ai.rolling || 0) >= ev.req);
+          } else {
+             // Low tier / Regional (req == 0): Exclude Top 50 ranked skaters to prevent crushing
+             // Sort by rolling to find top 50
+             const globalRanked = [...workingAiSkaters].sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+             const eliteIds = new Set(globalRanked.slice(0, 50).map(s => s.id));
+             candidates = candidates.filter(ai => !eliteIds.has(ai.id));
+          }
+
+          // Selection: Only Top N by Ranking from the candidate pool can enter
+          candidates.sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+          const participants = candidates.slice(0, ev.max);
+          
+          // Mark as competed
+          participants.forEach(p => aiCompetedIds.add(p.id));
+
+          // Competition: Simulate Match Scores
+          const matchResults = participants.map(ai => ({
+              ai,
+              matchScore: simulateAIProgram(ai, ev.template)
+          }));
+
+          // Ranking: Sort by Match Score
+          matchResults.sort((a,b) => b.matchScore - a.matchScore);
+
+          // Award Points based on Rank
+          matchResults.forEach((res, rankIdx) => {
+              const rank = rankIdx + 1;
+              // Points curve: Winner gets base pts, others decay
+              const pts = Math.floor(ev.pts / (rank * 0.4 + 0.6));
+              res.ai.pointsCurrent += pts;
+          });
+      });
+
+      // 3. Final Rolling Update
+      workingAiSkaters.forEach(ai => {
+          ai.rolling = calculateRolling(ai);
+      });
+      // --- END NEW AI LOGIC ---
 
       const updatedHistory = [...prev.history, { 
         month: `${prev.year}.${prev.month}`, 
@@ -466,7 +633,6 @@ const App: React.FC = () => {
         setTimeout(() => addLog("由于过度疲劳，部分训练效果严重受损！请务必安排休息。", 'event'), 300);
       }
 
-      // Calculate last growth for display (derived)
       const tecGain = updatedSkater.tec - prev.skater.tec;
       const artGain = updatedSkater.art - prev.skater.art;
 
@@ -474,7 +640,7 @@ const App: React.FC = () => {
         ...prev, year: ny, month: nm, 
         money: prev.money - currentCoach.salary + sponsorIncome + moneyBonus, 
         fame: Math.max(0, prev.fame + fameBonus), 
-        skater: updatedSkater, aiSkaters, activeSponsor: updatedSponsor, 
+        skater: updatedSkater, aiSkaters: workingAiSkaters, activeSponsor: updatedSponsor, 
         history: updatedHistory, hasCompeted: false, 
         activeEvent: triggeredEvent ? { event: triggeredEvent, narrative: generateLocalNarrative(triggeredEvent) } : null, 
         market: updatedMarket, inventory: remainingInventory,
@@ -494,22 +660,14 @@ const App: React.FC = () => {
   const buyItem = (item: Equipment) => {
     if (game.money < item.price) return alert("资金不足");
     setGame(prev => {
-        // Recalc stats with new item
         const newInv = [...prev.inventory, { ...item, owned: true }];
-        
-        // Combine Base + New Inventory to get new Tec/Art
         const totalAttrs = getTotalAttributes(prev.skater.attributes!, newInv);
         const d = calcDerivedStats(totalAttrs);
-        
         return { 
             ...prev, 
             money: prev.money - item.price, 
             inventory: newInv,
-            skater: { 
-                ...prev.skater, 
-                tec: d.tec, 
-                art: d.art
-            } 
+            skater: { ...prev.skater, tec: d.tec, art: d.art } 
         };
     });
     addLog(`购入器材: ${item.name}`, 'shop');
@@ -522,7 +680,6 @@ const App: React.FC = () => {
     return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance);
   }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, calculateWeeklyStats, game.skater.attributes!.endurance]);
 
-  // Use Total Attributes for Display (Base + Equipment)
   const displayAttributes = useMemo(() => {
     if (!game.skater.attributes) return null;
     return getTotalAttributes(game.skater.attributes, game.inventory);
@@ -833,6 +990,84 @@ const App: React.FC = () => {
                     <button key={s.k} onClick={() => setCareerSubTab(s.k as any)} className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${careerSubTab === s.k ? 'bg-white text-slate-950 shadow-lg' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}>{s.l}</button>
                 ))}</div>
 
+                {careerSubTab === 'honors' && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
+                    <div className="p-6 bg-slate-800/30 border-b border-slate-800 flex justify-between items-center">
+                       <h3 className="text-xs font-black uppercase text-white tracking-widest">生涯荣誉记录簿</h3>
+                       <span className="text-[10px] text-slate-500 italic">仅记录重大赛事前三及常规赛冠军</span>
+                    </div>
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-800/50 text-[10px] font-black uppercase text-slate-500 tracking-widest">
+                          <th className="px-8 py-6">年份/月</th>
+                          <th className="px-8 py-6">赛事全称</th>
+                          <th className="px-8 py-6">名次成绩</th>
+                          <th className="px-8 py-6 text-right">获得积分</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {game.skater.honors.slice().reverse().map((h, i) => (
+                          <tr key={i} className="hover:bg-slate-800/30 transition-all group">
+                            <td className="px-8 py-5 text-sm font-mono text-slate-400 group-hover:text-white transition-colors">{h.year}.{h.month}</td>
+                            <td className="px-8 py-5 text-sm font-bold text-white italic tracking-tight">{h.eventName}</td>
+                            <td className="px-8 py-5">
+                               <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-lg ${h.rank === 1 ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30' : h.rank === 2 ? 'bg-slate-300 text-slate-900' : h.rank === 3 ? 'bg-orange-800 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                                 {h.rank === 1 ? '🥇 Winner' : h.rank === 2 ? '🥈 Silver' : h.rank === 3 ? '🥉 Bronze' : `Rank ${h.rank}`}
+                               </span>
+                            </td>
+                            <td className="px-8 py-5 text-right font-mono font-black text-blue-400 text-sm">+{h.points.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {game.skater.honors.length === 0 && (
+                       <div className="py-32 text-center opacity-30 italic text-sm">记录簿上一片空白，等待你的首枚奖牌...</div>
+                    )}
+                  </div>
+                )}
+
+                {careerSubTab === 'stats' && (
+                  <div className="space-y-6">
+                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
+                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">能力演化轨迹 (保留两位小数)</h3>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={game.history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis stroke="#475569" fontSize={9} axisLine={false} tickLine={false} domain={[0, 100]} />
+                            <Tooltip
+                               formatter={(v: any) => Number(v).toFixed(2)}
+                               contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }}
+                            />
+                            <Legend />
+                            <Area type="monotone" dataKey="tec" name="技术能力(TEC)" stroke="#3b82f6" strokeWidth={3} fill="#3b82f622" dot={false} />
+                            <Area type="monotone" dataKey="art" name="艺术感悟(ART)" stroke="#a855f7" strokeWidth={3} fill="#a855f722" dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
+                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">商业价值趋势(ISU积分 / 核心名望)</h3>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={game.history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="left" stroke="#3b82f6" fontSize={9} axisLine={false} tickLine={false} />
+                            <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" fontSize={9} axisLine={false} tickLine={false} />
+                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }} />
+                            <Legend />
+                            <Area yAxisId="left" type="stepAfter" dataKey="rank" name="世界排名总分" stroke="#3b82f6" strokeWidth={2} fill="#3b82f611" dot={false} />
+                            <Area yAxisId="right" type="monotone" dataKey="fame" name="公众影响力" stroke="#f59e0b" strokeWidth={2} fill="#f59e0b11" dot={false} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {careerSubTab === 'profile' && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl">
@@ -889,84 +1124,6 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
-
-                {careerSubTab === 'honors' && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
-                    <div className="p-6 bg-slate-800/30 border-b border-slate-800 flex justify-between items-center">
-                       <h3 className="text-xs font-black uppercase text-white tracking-widest">生涯荣誉记录簿</h3>
-                       <span className="text-[10px] text-slate-500 italic">仅记录重大赛事前三及常规赛冠军</span>
-                    </div>
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-800/50 text-[10px] font-black uppercase text-slate-500 tracking-widest">
-                          <th className="px-8 py-6">年份/月</th>
-                          <th className="px-8 py-6">赛事全称</th>
-                          <th className="px-8 py-6">名次成绩</th>
-                          <th className="px-8 py-6 text-right">获得积分</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/50">
-                        {game.skater.honors.slice().reverse().map((h, i) => (
-                          <tr key={i} className="hover:bg-slate-800/30 transition-all group">
-                            <td className="px-8 py-5 text-sm font-mono text-slate-400 group-hover:text-white transition-colors">{h.year}.{h.month}</td>
-                            <td className="px-8 py-5 text-sm font-bold text-white italic tracking-tight">{h.eventName}</td>
-                            <td className="px-8 py-5">
-                               <span className={`text-[9px] font-black uppercase px-3 py-1 rounded-lg ${h.rank === 1 ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30' : h.rank === 2 ? 'bg-slate-300 text-slate-900' : h.rank === 3 ? 'bg-orange-800 text-white' : 'bg-slate-800 text-slate-400'}`}>
-                                 {h.rank === 1 ? '🥇 Winner' : h.rank === 2 ? '🥈 Silver' : h.rank === 3 ? '🥉 Bronze' : `Rank ${h.rank}`}
-                               </span>
-                            </td>
-                            <td className="px-8 py-5 text-right font-mono font-black text-blue-400 text-sm">+{h.points.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {game.skater.honors.length === 0 && (
-                       <div className="py-32 text-center opacity-30 italic text-sm">记录薄上一片空白，等待你的首枚奖牌...</div>
-                    )}
-                  </div>
-                )}
-
-                {careerSubTab === 'stats' && (
-                  <div className="space-y-6">
-                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
-                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">能力演化轨迹 (保留两位小数)</h3>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={game.history}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
-                            <YAxis stroke="#475569" fontSize={9} axisLine={false} tickLine={false} domain={[0, 100]} />
-                            <Tooltip 
-                               formatter={(v: any) => Number(v).toFixed(2)}
-                               contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }} 
-                            />
-                            <Legend />
-                            <Area type="monotone" dataKey="tec" name="技术能力 (TEC)" stroke="#3b82f6" strokeWidth={3} fill="#3b82f622" dot={false} />
-                            <Area type="monotone" dataKey="art" name="艺术感悟 (ART)" stroke="#a855f7" strokeWidth={3} fill="#a855f722" dot={false} />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
-                      <h3 className="text-xs font-black uppercase text-slate-500 mb-8 tracking-widest">商业价值趋势 (ISU积分 / 核心名望)</h3>
-                      <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={game.history}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                            <XAxis dataKey="month" stroke="#475569" fontSize={9} axisLine={false} tickLine={false} />
-                            <YAxis yAxisId="left" stroke="#3b82f6" fontSize={9} axisLine={false} tickLine={false} />
-                            <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" fontSize={9} axisLine={false} tickLine={false} />
-                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '16px' }} />
-                            <Legend />
-                            <Area yAxisId="left" type="stepAfter" dataKey="rank" name="世界排名总分" stroke="#3b82f6" strokeWidth={2} fill="#3b82f611" dot={false} />
-                            <Area yAxisId="right" type="monotone" dataKey="fame" name="公众影响力" stroke="#f59e0b" strokeWidth={2} fill="#f59e0b11" dot={false} />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -995,7 +1152,6 @@ const App: React.FC = () => {
                            showMatch.event.name.includes("奥运会") || 
                            showMatch.event.name.includes("总决赛");
             
-            // Endurance reduces STA consumption
             const enduranceFactor = game.skater.attributes ? (game.skater.attributes.endurance / 200) : 0; 
             const finalStaCost = Math.max(5, MATCH_STAMINA_COST * (1 - enduranceFactor));
 
@@ -1027,200 +1183,542 @@ const App: React.FC = () => {
 };
 
 const MatchEngine: React.FC<{ event: GameEvent, skater: Skater, aiSkaters: Skater[], onClose: (results: any[]) => void }> = ({ event, skater, aiSkaters, onClose }) => {
-  const [stage, setStage] = useState<'intro' | 'active' | 'results'>('intro');
-  const [currentIdx, setCurrentIdx] = useState(0);
+  const [stage, setStage] = useState<'intro' | 'config' | 'active' | 'results'>('intro');
+  const [phaseIndex, setPhaseIndex] = useState(0); 
   const [participants, setParticipants] = useState<any[]>([]);
   const [commentary, setCommentary] = useState<string>("广播中：下一位选手请进入场地...");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isAutoMode, setIsAutoMode] = useState(false);
-  const [fastSim, setFastSim] = useState(false);
-  const [lastScoreDetail, setLastScoreDetail] = useState<{tes: number, pcs: number, fail: boolean} | null>(null);
+  const [playerMatchSta, setPlayerMatchSta] = useState(0);
+  const [playerAccumulatedScore, setPlayerAccumulatedScore] = useState(0);
+  const [history, setHistory] = useState<{name: string, score: number, desc: string, phaseName: string}[]>([]);
+  
+  // Program Configuration State
+  const [programConfig, setProgramConfig] = useState<ProgramConfig>({ elements: [] });
+  const [configStrategy, setConfigStrategy] = useState<ConfigStrategy>('balanced');
+  const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  const matchTemplate = MATCH_STRUCTURES[event.template] || MATCH_STRUCTURES['low'];
+  const phases = matchTemplate.phases;
+  
+  // Initialize with balanced config
+  useEffect(() => {
+    if (programConfig.elements.length === 0 && skater.attributes) {
+      const initialConfig = generateProgramConfig(skater.attributes, phases, 'balanced');
+      setProgramConfig(initialConfig);
+    }
+  }, []);
 
   useEffect(() => {
-    const pool = aiSkaters
-        .filter(ai => (ai.rolling || 0) >= event.req * 0.8 && ai.injuryMonths === 0)
-        .sort((a,b) => (b.rolling || 0) - (a.rolling || 0))
-        .slice(0, event.max - 1);
-    const pList = [...pool, { ...skater, isPlayer: true }]
-      .map(p => ({ ...p, score: 0 }))
-      .sort(() => 0.5 - Math.random());
+    // 1. Filter valid AI
+    let pool = aiSkaters
+        .filter(ai => ai.injuryMonths === 0);
+    
+    // Logic for participant selection based on tier
+    if (event.req === 0) {
+        // Low tier event: Exclude top 50 ranked skaters to simulate regional/rookie level
+        const globalRanked = [...pool].sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+        // Take from index 50 onwards
+        pool = globalRanked.slice(50);
+        // Sort this pool to get the "best of the rest" for a challenge
+        pool.sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+    } else {
+        // Standard logic: Filter by requirements
+        pool = pool.filter(ai => (ai.rolling || 0) >= event.req * 0.8);
+        pool.sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+    }
+
+    const selectedAI = pool.slice(0, event.max - 1);
+    
+    // 2. Setup Participants with Initial State
+    // Calculate AI scores immediately to establish the "target"
+    const pList = [...selectedAI].map(ai => {
+        // Use the unified AI simulation logic
+        const score = simulateAIProgram(ai, event.template);
+        return { ...ai, score };
+    });
+    
+    // Add Player (Score 0 initially)
+    pList.push({ ...skater, isPlayer: true, score: 0 });
+
     setParticipants(pList);
-    setCurrentIdx(0);
+    setPlayerMatchSta(skater.sta);
     setIsProcessing(false);
   }, []);
 
-  const runTurn = useCallback(async (risk: number) => {
+  const executeConfiguredAction = async () => {
     if (isProcessing) return;
-    const p = participants[currentIdx];
-    if (!p) return;
+    
+    const currentElement = programConfig.elements[phaseIndex];
+    const action = getActionFromElement(currentElement);
+    
+    if (!action) {
+      console.error('No action configured for element:', currentElement);
+      return;
+    }
+    
     setIsProcessing(true);
-    let finalScore = 0;
-    
-    if (p.isPlayer) {
-      const freshnessMod = Math.max(0.4, p.activeProgram.freshness / 100);
-      
-      // Endurance reduces fatigue impact
-      // Use Base Attributes if total attributes are not passed to MatchEngine, 
-      // BUT for simplicity in MatchEngine, we use `skater.attributes` which should ideally be TOTAL in context of match performance?
-      // Actually, standard practice: skater passed to MatchEngine has `tec` and `art` already calculated from Base+Equip in `nextMonth` or `buyItem`.
-      // So we use skater.tec and skater.art for the base calculation.
-      // But we need Endurance for Stamina Factor calculation in MatchEngine.
-      // Currently `skater.attributes` in state is BASE. 
-      // However, `skater.tec` and `skater.art` ARE derived (Total).
-      // Let's rely on `skater.attributes.endurance` (Base) for simplicity in MatchEngine stamina calculation, 
-      // OR ideally we should pass "Effective Skater" to MatchEngine.
-      // Given the refactor, let's keep it simple: `enduranceBonus` from equipment is mostly small.
-      
-      const enduranceBonus = p.attributes ? (p.attributes.endurance * 0.05) : 0;
-      const staFactor = Math.min(1.0, 0.92 + (p.sta / 100) * 0.08 + (enduranceBonus / 100));
-      
-      const failChance = clamp(risk * 50 - p.tec * 0.4, 5, 95);
-      const isFail = Math.random() * 100 < failChance;
-      
-      const tes = (event.base + risk * 30) + (p.tec * 0.9) + (Math.random() * 15);
-      const pcs = (p.art * 1.1 + (p.activeProgram?.baseArt || 30)) * freshnessMod;
-      
-      finalScore = ((tes * (isFail ? 0.6 : 1.0)) + pcs) * staFactor;
-      setLastScoreDetail({ tes: tes * (isFail ? 0.6 : 1.0) * staFactor, pcs: pcs * staFactor, fail: isFail });
-    } else {
-      finalScore = (event.base + (p.tec * 0.85) + (p.art * 0.75) + Math.random() * 15) * (0.95 + Math.random() * 0.05);
-    }
-    
-    const updated = [...participants]; 
-    updated[currentIdx].score = finalScore;
-    setParticipants(updated);
-    setIsProcessing(false);
-    
-    if (currentIdx < participants.length - 1) {
-      setCurrentIdx(prev => prev + 1);
-    } else {
-      const sortedRes = [...updated].sort((a,b) => b.score - a.score);
-      const pRank = sortedRes.findIndex(r => r.isPlayer) + 1;
-      setCommentary(generateLocalCommentary(pRank));
-      setStage('results');
-    }
-  }, [currentIdx, participants, isProcessing, event.base, skater.activeProgram.freshness]);
+    await new Promise(r => setTimeout(r, 800));
 
-  const instantCompleteAI = () => {
-    const updated = [...participants];
-    for (let i = currentIdx; i < updated.length; i++) {
-      const p = updated[i];
-      if (p.isPlayer && p.score === 0) {
-          setCurrentIdx(i);
-          return;
-      }
-      if (p.score === 0) {
-        p.score = (event.base + (p.tec * 0.85) + (p.art * 0.75) + Math.random() * 15) * (0.95 + Math.random() * 0.05);
-      }
+    // Use unified scoring calculation
+    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true);
+
+    const nextSta = clamp(playerMatchSta - result.cost, 0, 100);
+    const finalScore = result.score;
+    
+    setPlayerMatchSta(nextSta);
+    setPlayerAccumulatedScore(prev => prev + finalScore);
+    
+    setHistory(prev => [...prev, {
+        name: action.name,
+        score: finalScore,
+        desc: result.isFail ? `摔倒 (GOE -5)` : `GOE ${result.goe > 0 ? '+' : ''}${result.goe.toFixed(1)}`,
+        phaseName: PHASE_META[action.type].name
+    }]);
+
+    if (phaseIndex < programConfig.elements.length - 1) {
+        setPhaseIndex(prev => prev + 1);
+        setIsProcessing(false);
+    } else {
+        finishMatch(playerAccumulatedScore + finalScore);
     }
-    const sortedRes = [...updated].sort((a,b) => b.score - a.score);
-    const pRank = sortedRes.findIndex(r => r.isPlayer) + 1;
-    setParticipants(updated);
-    setCommentary(generateLocalCommentary(pRank));
-    setStage('results');
+  };
+  
+  // Drag and drop handlers
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+  
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+    
+    const newElements = [...programConfig.elements];
+    const draggedElement = newElements[draggedIndex];
+    newElements.splice(draggedIndex, 1);
+    newElements.splice(index, 0, draggedElement);
+    
+    setProgramConfig({ elements: newElements });
+    setDraggedIndex(index);
+    setConfigStrategy('custom');
+  };
+  
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
   };
 
-  useEffect(() => {
-    if (stage === 'active' && participants[currentIdx] && !participants[currentIdx].isPlayer && !isProcessing && isAutoMode) {
-      const delay = fastSim ? 50 : 500;
-      const timer = setTimeout(() => runTurn(1.0), delay);
-      return () => clearTimeout(timer);
-    }
-  }, [stage, currentIdx, isProcessing, isAutoMode, fastSim, runTurn]);
+  const finishMatch = (finalPlayerScore: number) => {
+    const finalParticipants = participants.map(p => {
+        if (p.isPlayer) return { ...p, score: finalPlayerScore };
+        return p;
+    });
+    const sortedRes = [...finalParticipants].sort((a,b) => b.score - a.score);
+    const pRank = sortedRes.findIndex(r => r.isPlayer) + 1;
+    setParticipants(finalParticipants);
+    setCommentary(generateLocalCommentary(pRank));
+    setStage('results');
+    setIsProcessing(false);
+  };
 
   const sorted = [...participants].sort((a,b) => b.score - a.score);
   const playerRank = sorted.findIndex(r => r.isPlayer) + 1;
+  const currentElement = stage === 'active' && programConfig.elements.length > phaseIndex 
+    ? programConfig.elements[phaseIndex] 
+    : programConfig.elements[0];
+  const phaseMeta = currentElement ? PHASE_META[currentElement.phase] : PHASE_META['jump_solo'];
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-950/98 backdrop-blur-3xl flex items-center justify-center p-8 animate-in fade-in duration-500 overflow-hidden text-slate-200 font-sans">
-      <div className="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-3 gap-8 h-full max-h-[85vh]">
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative flex flex-col overflow-hidden">
-          <p className="text-[10px] font-black uppercase text-slate-500 mb-6 tracking-[0.6em] shrink-0 text-center">{event.name}</p>
-          <div className="flex-1 flex flex-col justify-center items-center overflow-y-auto px-4 py-2 custom-scrollbar">
+      <div className="max-w-7xl w-full grid grid-cols-1 lg:grid-cols-12 gap-8 h-full max-h-[90vh]">
+        <div className="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-[3rem] p-10 shadow-2xl relative flex flex-col overflow-hidden">
+          <p className="text-[10px] font-black uppercase text-slate-500 mb-6 tracking-[0.6em] shrink-0 text-center">{event.name} - {matchTemplate.name}</p>
+          <div className="flex-1 flex flex-col overflow-y-auto px-2 py-2 custom-scrollbar relative">
             {stage === 'intro' && (
-              <div className="text-center animate-in zoom-in duration-500">
-                <h2 className="text-6xl font-black text-white italic mb-12 tracking-tighter uppercase">入冰仪式</h2>
-                <div className="flex gap-4 justify-center">
-                    <button onClick={() => setStage('active')} className="bg-blue-600 hover:bg-blue-500 px-24 py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95 text-white">开始热身</button>
-                    <button onClick={() => { setStage('active'); setFastSim(true); setIsAutoMode(true); }} className="bg-slate-800 hover:bg-slate-700 px-10 py-6 rounded-2xl font-black text-sm uppercase tracking-widest text-slate-400">快速过场</button>
+              <div className="flex-1 flex flex-col justify-center items-center text-center animate-in zoom-in duration-500">
+                <h2 className="text-6xl font-black text-white italic mb-8 tracking-tighter uppercase">入冰仪式</h2>
+                <div className="max-w-md text-slate-400 text-sm mb-12 leading-relaxed">{matchTemplate.desc}</div>
+                <button onClick={() => setStage('config')} className="bg-blue-600 hover:bg-blue-500 px-24 py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95 text-white">配置节目</button>
+              </div>
+            )}
+
+            {stage === 'config' && skater.attributes && (
+              <div className="flex-1 flex flex-col animate-in fade-in duration-300">
+                <h2 className="text-3xl font-black text-white italic mb-2 tracking-tighter">节目配置</h2>
+                <p className="text-xs text-slate-500 mb-6">选择策略或自定义每个技术要素的动作</p>
+
+                {/* Strategy Selection */}
+                <div className="grid grid-cols-3 gap-4 mb-8">
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('conservative');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'conservative'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'conservative' ? 'bg-emerald-900/30 border-emerald-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">🛡️</div>
+                    <h3 className="text-lg font-black text-white mb-1">保守策略</h3>
+                    <p className="text-xs text-slate-500">优先稳定，降低失误风险</p>
+                    <p className="text-xs text-emerald-400 mt-2 font-bold">失误率 ≤ 25%</p>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('balanced');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'balanced'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'balanced' ? 'bg-blue-900/30 border-blue-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">⚖️</div>
+                    <h3 className="text-lg font-black text-white mb-1">默认策略</h3>
+                    <p className="text-xs text-slate-500">平衡难度与成功率</p>
+                    <p className="text-xs text-blue-400 mt-2 font-bold">失误率 ≤ 40%</p>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setConfigStrategy('aggressive');
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'aggressive'));
+                    }}
+                    className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'aggressive' ? 'bg-red-900/30 border-red-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
+                  >
+                    <div className="text-2xl mb-2">⚡</div>
+                    <h3 className="text-lg font-black text-white mb-1">激进策略</h3>
+                    <p className="text-xs text-slate-500">冲击最高难度分数</p>
+                    <p className="text-xs text-red-400 mt-2 font-bold">追求极限BV</p>
+                  </button>
+                </div>
+
+                {/* Config Summary */}
+                <div className="grid grid-cols-2 gap-4 mb-6 p-6 bg-slate-950 rounded-2xl border border-slate-800">
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">总基础分 (BV)</p>
+                    <p className="text-3xl font-black text-blue-400">{calculateConfigTotalBV(programConfig).toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">平均风险</p>
+                    <p className={`text-3xl font-black ${calculateConfigAvgRisk(programConfig) > 0.4 ? 'text-red-400' : calculateConfigAvgRisk(programConfig) > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {(calculateConfigAvgRisk(programConfig) * 100).toFixed(0)}%
+                    </p>
+                  </div>
+                </div>
+
+                {/* Element List with Drag and Drop */}
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <h3 className="text-xs font-black uppercase text-slate-500 mb-2 tracking-widest">技术要素配置</h3>
+                  <p className="text-xs text-slate-600 mb-4">拖动调整执行顺序</p>
+                  <div className="space-y-3">
+                    {programConfig.elements.map((element, idx) => {
+                      const action = getActionFromElement(element);
+                      const phaseMeta = PHASE_META[element.phase];
+                      
+                      return (
+                        <div 
+                          key={idx}
+                          draggable
+                          onDragStart={() => handleDragStart(idx)}
+                          onDragOver={(e) => handleDragOver(e, idx)}
+                          onDragEnd={handleDragEnd}
+                          className={`bg-slate-950 border-2 rounded-2xl p-4 transition-all cursor-move hover:border-blue-500/50 ${
+                            draggedIndex === idx ? 'opacity-50 scale-95' : 'opacity-100'
+                          } ${draggedIndex !== null && draggedIndex !== idx ? 'border-slate-700' : 'border-slate-800'}`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-3">
+                              <span className="text-slate-600 font-black text-sm min-w-[24px]">#{idx + 1}</span>
+                              <span className="text-2xl">{phaseMeta.icon}</span>
+                              <div>
+                                <h4 className="text-sm font-black text-white">{phaseMeta.name}</h4>
+                                <p className="text-xs text-slate-500">{action?.name || '未配置'}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setEditingElementIndex(idx)}
+                              className="text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg transition-all"
+                            >
+                              调整
+                            </button>
+                          </div>
+                          {action && (
+                            <div className="flex gap-4 text-xs mt-3 pt-3 border-t border-slate-800/50">
+                              <div>
+                                <span className="text-slate-600">BV:</span>
+                                <span className="text-blue-400 font-bold ml-1">{action.baseScore.toFixed(1)}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-600">失误率:</span>
+                                <span className={`font-bold ml-1 ${action.risk > 0.4 ? 'text-red-400' : action.risk > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {(action.risk * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-600">体力:</span>
+                                <span className="text-slate-300 font-bold ml-1">{action.cost}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Bottom Actions */}
+                <div className="flex gap-4 mt-6 pt-6 border-t border-slate-800">
+                  <button
+                    onClick={() => setStage('intro')}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-white px-8 py-4 rounded-2xl font-black transition-all"
+                  >
+                    返回
+                  </button>
+                  <button
+                    onClick={() => setStage('active')}
+                    className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-black text-xl transition-all active:scale-95"
+                  >
+                    确认配置 · 开始比赛
+                  </button>
                 </div>
               </div>
             )}
-            {stage === 'active' && participants[currentIdx] && (
-              <div className="animate-in fade-in duration-300 w-full flex flex-col items-center">
-                <h3 className="text-5xl font-black text-white italic tracking-tighter mb-4">{participants[currentIdx].name}</h3>
-                <p className="text-blue-500 font-black uppercase text-xs tracking-widest mb-10 italic">{participants[currentIdx].isPlayer ? '正在展现表演 - 请选择策略' : '正在展现表演 - 裁判观察中'}</p>
-                {participants[currentIdx].isPlayer ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-2xl">
-                    {[ {r: 0.8, l: "保守发挥", d: "低风险 / 稳定"}, {r: 1.3, l: "标准发挥", d: "均衡 / 全力"}, {r: 2.2, l: "挑战自我", d: "极限 / 冲击"} ].map(b => (
-                      <button key={b.l} disabled={isProcessing} onClick={() => runTurn(b.r)} className="bg-slate-950 border-2 border-slate-800 p-8 rounded-3xl hover:border-blue-500 hover:scale-105 transition-all shadow-xl group text-left">
-                        <p className="text-lg font-black text-blue-400 group-hover:text-blue-300 mb-1">{b.l}</p>
-                        <p className="text-[8px] text-slate-600 font-bold uppercase">{b.d}</p>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="py-20 flex flex-col items-center">
-                    <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-8"></div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest animate-pulse">{fastSim ? '极速评分中...' : '正在打分...'}</p>
-                  </div>
-                )}
+
+            {stage === 'active' && (
+              <div className="animate-in fade-in duration-300 w-full flex flex-col h-full">
+                 <div className="flex items-center justify-between mb-8 px-4 relative">
+                    <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-slate-800 -z-0"></div>
+                    {programConfig.elements.map((elem, idx) => {
+                        const isPast = idx < phaseIndex;
+                        const isCurrent = idx === phaseIndex;
+                        const pMeta = PHASE_META[elem.phase];
+                        return (
+                            <div key={idx} className={`relative z-10 flex flex-col items-center transition-all duration-500 ${isCurrent ? 'scale-110' : 'scale-90 opacity-60'}`}>
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg border-4 transition-colors ${isPast ? 'bg-emerald-500 border-emerald-600 text-white' : isCurrent ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_20px_rgba(59,130,246,0.5)]' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
+                                    {isPast ? '✓' : pMeta.icon}
+                                </div>
+                                <span className={`text-[9px] font-black uppercase mt-2 px-2 py-0.5 rounded-full ${isCurrent ? 'bg-blue-900/50 text-blue-200' : 'text-slate-600 bg-slate-950'}`}>{pMeta.name}</span>
+                            </div>
+                        );
+                    })}
+                 </div>
+
+                 <div className="flex justify-between items-end mb-6 bg-slate-950/50 p-6 rounded-3xl border border-slate-800/50">
+                    <div>
+                        <h3 className="text-3xl font-black text-white italic mb-1">{phaseMeta.name}</h3>
+                        <div className="flex gap-2">
+                             {phaseMeta.relevantAttrs.map(attr => (
+                                 <span key={attr} className="text-[9px] font-black uppercase bg-slate-800 text-slate-400 px-2 py-0.5 rounded">{attr}</span>
+                             ))}
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">当前得分</p>
+                        <p className="text-4xl font-mono font-black text-blue-400">{playerAccumulatedScore.toFixed(2)}</p>
+                    </div>
+                 </div>
+
+                 <div className="flex-1 flex flex-col items-center justify-center">
+                     {(() => {
+                       const currentElement = programConfig.elements[phaseIndex];
+                       if (!currentElement) return <p className="text-red-400">配置错误</p>;
+                       
+                       const currentAction = getActionFromElement(currentElement);
+                       if (!currentAction) return <p className="text-red-400">动作未找到</p>;
+                       
+                       const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true);
+                       
+                       return (
+                         <div className="w-full max-w-xl animate-in zoom-in duration-500">
+                           <div className="bg-gradient-to-br from-slate-900 to-slate-950 border-2 border-blue-500/50 rounded-3xl p-10 shadow-2xl">
+                             <div className="text-center mb-8">
+                               <div className="text-6xl mb-4">{PHASE_META[currentElement.phase].icon}</div>
+                               <h3 className="text-4xl font-black text-white mb-2">{currentAction.name}</h3>
+                               <p className="text-sm text-slate-400">{currentAction.desc}</p>
+                             </div>
+                             
+                             <div className="grid grid-cols-4 gap-4 mb-8">
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">基础分</p>
+                                 <p className="text-2xl font-black text-blue-400">{currentAction.baseScore.toFixed(1)}</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">体力消耗</p>
+                                 <p className={`text-2xl font-black ${playerMatchSta < preview.cost ? 'text-red-400' : 'text-slate-300'}`}>{preview.cost.toFixed(0)}</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">失误率</p>
+                                 <p className={`text-2xl font-black ${currentAction.risk > 0.4 ? 'text-amber-400' : 'text-emerald-400'}`}>{(currentAction.risk * 100).toFixed(0)}%</p>
+                               </div>
+                               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                                 <p className="text-xs text-slate-500 mb-1">预计GOE</p>
+                                 <p className={`text-2xl font-black ${preview.goe > 2 ? 'text-emerald-400' : preview.goe < 0 ? 'text-red-400' : 'text-slate-300'}`}>{preview.goe > 0 ? '+' : ''}{preview.goe.toFixed(1)}</p>
+                               </div>
+                             </div>
+                             
+                             {isProcessing ? (
+                               <div className="text-center py-8">
+                                 <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                                 <p className="text-sm text-slate-400 animate-pulse">执行中...</p>
+                               </div>
+                             ) : (
+                               <button
+                                 onClick={executeConfiguredAction}
+                                 className="w-full bg-blue-600 hover:bg-blue-500 text-white py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95"
+                               >
+                                 执行动作
+                               </button>
+                             )}
+                           </div>
+                         </div>
+                       );
+                     })()}
+                 </div>
+
+                 <div className="mt-6">
+                    <div className="flex justify-between text-[10px] font-bold uppercase text-slate-500 mb-2">
+                        <span>剩余体力</span>
+                        <span className={playerMatchSta < 20 ? "text-red-500 animate-pulse" : "text-emerald-400"}>{playerMatchSta.toFixed(0)}%</span>
+                    </div>
+                    <div className="h-2 bg-slate-900 rounded-full overflow-hidden"><div className={`h-full transition-all duration-500 ${playerMatchSta < 20 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${playerMatchSta}%` }}></div></div>
+                 </div>
               </div>
             )}
             {stage === 'results' && (
-              <div className="text-center animate-in zoom-in duration-700 w-full">
+              <div className="flex-1 flex flex-col justify-center items-center text-center animate-in zoom-in duration-700">
                 <div className="inline-block p-1 bg-gradient-to-tr from-amber-500 to-amber-200 rounded-3xl mb-8">
                   <div className="bg-slate-900 px-16 py-8 rounded-[1.4rem]">
                     <h2 className="text-9xl font-black italic text-white tracking-tighter">#{playerRank}</h2>
                   </div>
                 </div>
                 
-                {lastScoreDetail && (
-                  <div className="grid grid-cols-2 gap-4 max-w-md mx-auto mb-8 animate-in slide-in-from-bottom-4 duration-1000">
-                    <div className="bg-slate-950 p-6 rounded-2xl border border-blue-500/20">
-                      <p className="text-[10px] text-slate-500 font-black uppercase mb-1">技术分 (TES)</p>
-                      <p className={`text-2xl font-black ${lastScoreDetail.fail ? 'text-red-400' : 'text-blue-400'}`}>
-                        {lastScoreDetail.tes.toFixed(2)}
-                        {lastScoreDetail.fail && <span className="text-[10px] block font-bold">FALL DETECTED</span>}
-                      </p>
-                    </div>
-                    <div className="bg-slate-950 p-6 rounded-2xl border border-purple-500/20">
-                      <p className="text-[10px] text-slate-500 font-black uppercase mb-1">内容分 (PCS)</p>
-                      <p className="text-2xl font-black text-purple-400">{lastScoreDetail.pcs.toFixed(2)}</p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="bg-slate-900 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
+                <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
                 <button onClick={() => onClose(sorted)} className="bg-white text-slate-950 px-24 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认排名</button>
               </div>
             )}
           </div>
         </div>
-        <div className="bg-slate-900/50 border border-slate-800 rounded-[3rem] p-10 flex flex-col shadow-2xl overflow-hidden h-full">
-          <div className="flex flex-col gap-2 border-b border-slate-800 pb-5 mb-8">
-            <div className="flex justify-between items-center">
-                <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-[0.4em]">实时积分榜</h3>
-                <button onClick={() => { setIsAutoMode(!isAutoMode); if(!isAutoMode) setFastSim(false); }} className={`text-[8px] px-3 py-1.5 rounded-lg font-black uppercase tracking-widest transition-all ${isAutoMode && !fastSim ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-800 text-slate-500 hover:text-slate-300'}`}>⏯ 自动模式</button>
-            </div>
-            <div className="flex gap-2">
-                <button onClick={() => { setFastSim(!fastSim); setIsAutoMode(true); }} className={`flex-1 text-[8px] py-2 rounded-lg font-black uppercase tracking-widest transition-all ${fastSim ? 'bg-amber-500 text-black shadow-lg' : 'bg-slate-800 text-slate-500'}`}>{fastSim ? '⚡ 极速模式' : '⚡ 开启极速'}</button>
-                <button onClick={instantCompleteAI} className="flex-1 text-[8px] py-2 rounded-lg font-black uppercase tracking-widest bg-red-600/10 text-red-500 border border-red-600/20 hover:bg-red-600 hover:text-white transition-all">⏩ 跳过等待</button>
-            </div>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto pr-2 custom-scrollbar">
-            {participants.filter(p => p.score > 0).sort((a,b) => b.score - a.score).map((p, i) => (
-              <div key={i} className={`flex justify-between items-center p-5 rounded-2xl border transition-all animate-in slide-in-from-top-2 duration-300 ${p.isPlayer ? 'bg-blue-600/20 border-blue-500 shadow-lg' : 'bg-slate-950 border-slate-800'}`}>
-                <div className="flex items-center gap-4"><span className="text-[10px] font-black text-slate-600 w-5">{i+1}.</span><span className={`text-xs font-bold ${p.isPlayer ? 'text-blue-400 font-black' : 'text-slate-300'}`}>{p.name}</span></div>
-                <span className="font-mono text-xs text-white font-black italic">{p.score.toFixed(2)}</span>
+
+        <div className="lg:col-span-4 flex flex-col gap-6 h-full overflow-hidden">
+             <div className="flex-1 bg-slate-900/50 border border-slate-800 rounded-[3rem] p-8 flex flex-col shadow-xl overflow-hidden min-h-[300px]">
+                <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-[0.4em] mb-6">动作回放</h3>
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+                    {history.length === 0 && <p className="text-center text-slate-600 text-xs py-10 italic">比赛即将开始...</p>}
+                    {history.map((h, i) => {
+                        const isFall = h.desc.includes('摔倒');
+                        const goeMatch = h.desc.match(/GOE ([+-]?\d+\.?\d*)/);
+                        const goeValue = goeMatch ? parseFloat(goeMatch[1]) : 0;
+                        
+                        return (
+                            <div key={i} className={`border p-4 rounded-2xl animate-in slide-in-from-right-2 ${isFall ? 'bg-red-950/20 border-red-900/50' : 'bg-slate-950 border-slate-800'}`}>
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="text-[9px] font-black uppercase bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">{h.phaseName}</span>
+                                    <span className="font-mono text-emerald-400 font-bold">+{h.score.toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between items-end">
+                                    <span className="font-bold text-white text-sm">{h.name}</span>
+                                    <span className={`text-[9px] font-bold ${isFall ? 'text-red-400' : goeValue > 3 ? 'text-emerald-400' : 'text-slate-500'}`}>{h.desc}</span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+             </div>
+
+             <div className="h-1/3 bg-slate-900/50 border border-slate-800 rounded-[3rem] p-8 flex flex-col shadow-xl overflow-hidden">
+                <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-[0.4em] mb-4">实时榜单</h3>
+                <div className="flex-1 space-y-2 overflow-y-auto pr-2 custom-scrollbar">
+                    {participants.filter(p => p.score > 0).sort((a,b) => b.score - a.score).map((p, i) => (
+                    <div key={i} className={`flex justify-between items-center p-3 rounded-xl border transition-all ${p.isPlayer ? 'bg-blue-600/20 border-blue-500 shadow-lg' : 'bg-slate-950 border-slate-800'}`}>
+                        <div className="flex items-center gap-3"><span className="text-[9px] font-black text-slate-600 w-4">{i+1}</span><span className={`text-[10px] font-bold ${p.isPlayer ? 'text-blue-400 font-black' : 'text-slate-300'}`}>{p.name}</span></div>
+                        <span className="font-mono text-[10px] text-white font-black">{p.score.toFixed(2)}</span>
+                    </div>
+                    ))}
+                </div>
+             </div>
+         </div>
+      </div>
+      
+      {/* Edit Action Modal */}
+      {editingElementIndex !== null && skater.attributes && (
+        <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-300">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-4xl w-full max-h-[80vh] overflow-y-auto custom-scrollbar shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-2xl font-black text-white">
+                  {PHASE_META[programConfig.elements[editingElementIndex].phase].name} - 选择动作
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">点击选择要执行的技术动作</p>
               </div>
-            ))}
-            {participants.filter(p => p.score === 0).length > 0 && (
-                <p className="text-[8px] text-slate-600 text-center uppercase tracking-widest py-4">还有 {participants.filter(p => p.score === 0).length} 位选手等待出场</p>
-            )}
+              <button
+                onClick={() => setEditingElementIndex(null)}
+                className="text-slate-500 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full hover:bg-slate-800 transition-all"
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {ACTION_LIBRARY.filter(a => a.type === programConfig.elements[editingElementIndex].phase).map(action => {
+                const isAvailable = Object.entries(action.reqStats).every(
+                  ([key, val]) => (skater.attributes![key as keyof PlayerAttributes] || 0) >= val
+                );
+                const isSelected = programConfig.elements[editingElementIndex].actionId === action.id;
+                
+                return (
+                  <button
+                    key={action.id}
+                    disabled={!isAvailable}
+                    onClick={() => {
+                      const newElements = [...programConfig.elements];
+                      newElements[editingElementIndex] = {
+                        ...newElements[editingElementIndex],
+                        actionId: action.id
+                      };
+                      setProgramConfig({ elements: newElements });
+                      setConfigStrategy('custom');
+                      setEditingElementIndex(null);
+                    }}
+                    className={`text-left p-5 rounded-2xl border-2 transition-all ${
+                      !isAvailable 
+                        ? 'opacity-40 cursor-not-allowed bg-slate-950 border-slate-800' 
+                        : isSelected
+                        ? 'bg-blue-900/30 border-blue-500 shadow-lg'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-600 hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <span className={`font-black text-lg ${isAvailable ? 'text-white' : 'text-slate-600'}`}>
+                        {action.name}
+                        {isSelected && <span className="ml-2 text-xs text-blue-400">✓ 已选</span>}
+                      </span>
+                      <span className={`font-mono text-xs font-bold px-2 py-1 rounded ${isAvailable ? 'text-blue-400 bg-blue-900/20' : 'text-slate-600 bg-slate-800'}`}>
+                        BV: {action.baseScore.toFixed(1)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">{action.desc}</p>
+                    
+                    <div className="flex gap-4 text-xs border-t border-slate-800/50 pt-3">
+                      <div>
+                        <span className="text-slate-600">体力:</span>
+                        <span className={`font-bold ml-1 ${isAvailable ? 'text-slate-300' : 'text-slate-600'}`}>{action.cost}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-600">失误率:</span>
+                        <span className={`font-bold ml-1 ${!isAvailable ? 'text-slate-600' : action.risk > 0.4 ? 'text-red-400' : action.risk > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                          {(action.risk * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    </div>
+                    
+                    {!isAvailable && (
+                      <div className="mt-3 text-xs text-red-400 font-bold">
+                        需求: {Object.entries(action.reqStats).map(([k, v]) => `${k} ≥ ${v}`).join(', ')}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
