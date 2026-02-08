@@ -209,31 +209,188 @@ const generateLocalNarrative = (event: RandomEvent) => {
   return (pool && pool.length > 0) ? pool[Math.floor(Math.random() * pool.length)] : event.description;
 };
 
+// Sponsorship generation configs for flexible system
+const tierConfig = {
+  local: {
+    minFame: 0,
+    baseSigningBonus: 3000,
+    baseMonthlyPay: 800,
+    baseLumpPerMonth: 1000,
+    names: [
+      // 饮食
+      "冰点奶茶", "城市咖啡馆", "鲜叶食品", "甜蜜面包坊", "汉堡小站",
+      // 健身/运动场所
+      "城市之光健身", "动感滑冰场", "社区运动会", "阳光体育馆", "跨越瑜伽工作室",
+      // 运动品牌
+      "蓝天护具", "冰雪装备店", "运动小铺", "飞速运动品牌", "极限体育用品",
+      // 服饰/美容
+      "时尚服饰坊", "冰洁美容", "魅力造型室", "本地裁缝铺", "运动着装馆",
+      // 其他本地
+      "社区便利店", "本地快递驿站", "家居生活馆", "数码维修铺", "医疗保健所"
+    ]
+  },
+  brand: {
+    minFame: 350,
+    baseSigningBonus: 30000,
+    baseMonthlyPay: 5000,
+    baseLumpPerMonth: 6500,
+    names: [
+      // 运动品牌
+      "安踏体育", "李宁冰雪", "特步运动", "361度", "匹克体育", "乔丹体育", "鸿星尔克",
+      // 科技电子
+      "华为", "小米健康", "OPPO", "vivo", "联想", "TCL", "网易",
+      // 食品饮料
+      "可口可乐", "百事可乐", "蒙牛乳业", "伊利乳业", "光明乳业", "王老吉", "六个核桃",
+      // 服饰
+      "JACK & JONES", "H&M", "优衣库", "美邦", "森马", "太平鸟", "江南布衣",
+      // 汽车摩托
+      "长城汽车", "比亚迪", "吉利汽车", "五菱", "五羊本田",
+      // 金融保险
+      "平安保险", "人保财险", "工商银行", "中国银行", "建设银行",
+      // 其他
+      "暴雪娱乐", "腾讯游戏", "阿里巴巴", "京东", "美团", "滴滴出行"
+    ]
+  },
+  global: {
+    minFame: 1000,
+    baseSigningBonus: 250000,
+    baseMonthlyPay: 30000,
+    baseLumpPerMonth: 38000,
+    names: [
+      // 奢侈品牌
+      "Rolex", "Omega", "Louis Vuitton", "Gucci", "Hermes", "Prada", "Dior", "Burberry",
+      // 运动品牌
+      "Nike", "Adidas", "Puma", "New Balance", "Asics", "Mizuno", "Reebok",
+      // 饮料能源
+      "Red Bull", "Monster Energy", "Coca-Cola", "Pepsi", "Gatorade", "Powerade",
+      // 汽车
+      "Toyota", "Mercedes-Benz", "BMW", "Audi", "Porsche", "Ferrari", "Lamborghini", "Rolls-Royce",
+      // 金融支付
+      "Visa", "Mastercard", "American Express", "PayPal", "Stripe",
+      // 科技电子
+      "Samsung", "Apple", "Sony", "Microsoft", "Google", "Intel", "NVIDIA",
+      // 快消与食品
+      "Nestle", "Unilever", "P&G", "Colgate-Palmolive", "L'Oreal",
+      // 运动器材与服饰
+      "Gatorade", "Under Armour", "North Face", "Columbia Sportswear", "Arc'teryx",
+      // 其他国际品牌
+      "Uber", "Netflix", "Spotify", "Airbnb", "Hilton Hotels", "LVMH Group"
+    ]
+  }
+} as const;
+
+const durationOptions = [
+  { months: 6, weight: 0.10 },
+  { months: 12, weight: 0.35 },
+  { months: 18, weight: 0.15 },
+  { months: 24, weight: 0.28 },
+  { months: 30, weight: 0.08 },
+  { months: 36, weight: 0.04 }
+];
+
+const paymentTypeRoll = () => Math.random() > 0.6 ? 'lump-sum' as const : 'monthly' as const;
+
+const weightedPick = <T extends { months?: number, weight?: number }>(arr: T[]) => {
+  const total = arr.reduce((s, a) => s + (a.weight || 1), 0);
+  let r = Math.random() * total;
+  for (const a of arr) {
+    const w = a.weight || 1;
+    if (r < w) return a;
+    r -= w;
+  }
+  return arr[arr.length - 1];
+};
+
 const generateSponsorshipOptions = (fame: number): Sponsorship[] => {
-  const brands = {
-    local: ["社区运动会", "冰点奶茶", "城市之光健身", "蓝天护具", "动感滑冰场"],
-    brand: ["安踏体育", "李宁冰雪", "华为", "小米健康", "可口可乐"],
-    global: ["Rolex", "Red Bull", "Visa", "Omega", "Coca-Cola", "Louis Vuitton", "Samsung", "Toyota"]
-  };
   const options: Sponsorship[] = [];
+  const tiers: Array<keyof typeof tierConfig> = ['local','brand','global'];
   for (let i = 0; i < 4; i++) {
-    let type: 'local' | 'brand' | 'global' = 'local';
+    // pick tier weighted by fame - adjust threshold to make brand/global more accessible
+    let tier: keyof typeof tierConfig = 'local';
     const roll = Math.random();
-    if (fame > 1200 && roll > 0.4) type = 'global';
-    else if (fame > 400 && roll > 0.3) type = 'brand';
-    const brandName = brands[type][Math.floor(Math.random() * brands[type].length)];
-    const duration = type === 'global' ? 36 : type === 'brand' ? 24 : 12;
-    let bonus = type === 'global' ? 250000 : type === 'brand' ? 30000 : 3000;
-    let pay = type === 'global' ? 30000 : type === 'brand' ? 5000 : 800;
+    if (fame > 1000 && roll > 0.50) tier = 'global';  // Require higher fame, lower chance
+    else if (fame > 300 && roll > 0.35) tier = 'brand';  // Lower threshold, higher chance
+
+    const cfg = tierConfig[tier];
+    const name = cfg.names[Math.floor(Math.random() * cfg.names.length)];
+
+    const durationPick = weightedPick(durationOptions) as { months: number };
+    const duration = durationPick.months;
+
+    const paymentType = paymentTypeRoll();
+
+    // Tighter signing bonus variance: 0.85 - 1.15 instead of 0.8 - 1.4
+    const signingBonus = Math.floor(cfg.baseSigningBonus * (0.85 + Math.random() * 0.3));
+
+    let monthlyPay: number | undefined = undefined;
+    let totalPay: number | undefined = undefined;
+    if (paymentType === 'monthly') {
+      // Tighter monthly pay variance: 0.90 - 1.20
+      monthlyPay = Math.floor(cfg.baseMonthlyPay * (0.90 + Math.random() * 0.3));
+    } else {
+      // lump-sum: price per month * months with reduced variance
+      // Using tighter range 0.85 - 1.15 and lower baseLumpPerMonth rates
+      totalPay = Math.floor(cfg.baseLumpPerMonth * duration * (0.85 + Math.random() * 0.3));
+    }
+
     options.push({
-      id: `sp_${Date.now()}_${i}`,
-      name: brandName, type, duration, remainingMonths: duration,
-      signingBonus: bonus + Math.floor(Math.random() * bonus * 0.5),
-      monthlyPay: pay + Math.floor(Math.random() * pay * 0.3),
-      minFame: type === 'global' ? 1000 : type === 'brand' ? 350 : 0
+      id: `sp_${Date.now()}_${i}_${Math.floor(Math.random()*1000)}`,
+      name,
+      tier,
+      duration,
+      remainingMonths: duration,
+      paymentType,
+      signingBonus,
+      monthlyPay,
+      totalPay,
+      minFame: cfg.minFame
     });
   }
   return options;
+};
+
+const generateRenewalOptions = (currentSponsor: Sponsorship): Sponsorship[] => {
+  const renewalOptions: Sponsorship[] = [];
+  const durations = [12, 24, 36];
+  const discountRate = 0.85; // 15% discount generally
+  for (const duration of durations) {
+    const isLump = currentSponsor.paymentType === 'lump-sum';
+    const cfg = tierConfig[currentSponsor.tier];
+    const signing = Math.floor(currentSponsor.signingBonus * discountRate) + (duration > 12 ? 10000 : 0);
+    if (isLump) {
+      // convert lump-sum renewal: scale totalPay
+      const total = currentSponsor.totalPay ? Math.floor(currentSponsor.totalPay * discountRate * (duration / currentSponsor.duration)) : Math.floor(cfg.baseLumpPerMonth * duration * discountRate);
+      renewalOptions.push({
+        id: `renewal_${Date.now()}_${duration}_${Math.floor(Math.random()*1000)}`,
+        name: currentSponsor.name,
+        tier: currentSponsor.tier,
+        duration,
+        remainingMonths: duration,
+        paymentType: 'lump-sum',
+        signingBonus: signing,
+        totalPay: total,
+        minFame: currentSponsor.minFame,
+        isRenewal: true,
+        discount: discountRate
+      });
+    } else {
+      const monthly = currentSponsor.monthlyPay ? Math.floor(currentSponsor.monthlyPay * discountRate * (1 + (duration - currentSponsor.duration) * 0.01)) : Math.floor(cfg.baseMonthlyPay * discountRate);
+      renewalOptions.push({
+        id: `renewal_${Date.now()}_${duration}_${Math.floor(Math.random()*1000)}`,
+        name: currentSponsor.name,
+        tier: currentSponsor.tier,
+        duration,
+        remainingMonths: duration,
+        paymentType: 'monthly',
+        signingBonus: signing,
+        monthlyPay: monthly,
+        minFame: currentSponsor.minFame,
+        isRenewal: true,
+        discount: discountRate
+      });
+    }
+  }
+  return renewalOptions;
 };
 
 const generateMarket = (activeCoachId: string | null = null, currentMarket: any = null) => {
@@ -325,6 +482,9 @@ const App: React.FC = () => {
   const [loadingQuote, setLoadingQuote] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [sponsorOptions, setSponsorOptions] = useState<Sponsorship[]>([]);
+  const [showSponsorshipModal, setShowSponsorshipModal] = useState(false);
+  const [sponsorshipModalMode, setSponsorshipModalMode] = useState<'selection' | 'expired'>('selection');
+  const [sponsorshipRenewalOptions, setSponsorshipRenewalOptions] = useState<Sponsorship[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<'event' | 'development' | 'ranking' | 'career'>('event');
   const [devSubTab, setDevSubTab] = useState<'train' | 'coach' | 'equip' | 'choreo'>('train');
@@ -490,7 +650,10 @@ const App: React.FC = () => {
         }
       };
       
-      let sponsorIncome = prev.activeSponsor ? prev.activeSponsor.monthlyPay : 0;
+      let sponsorIncome = 0;
+      if (prev.activeSponsor) {
+        sponsorIncome = prev.activeSponsor.paymentType === 'monthly' ? (prev.activeSponsor.monthlyPay || 0) : 0;
+      }
       let updatedSponsor = prev.activeSponsor ? { ...prev.activeSponsor, remainingMonths: prev.activeSponsor.remainingMonths - 1 } : null;
       if (updatedSponsor && updatedSponsor.remainingMonths <= 0) {
         updatedSponsor = null;
@@ -649,12 +812,47 @@ const App: React.FC = () => {
     });
     setIsProcessing(false);
     addLog(`进入 ${game.month === 12 ? game.year + 1 : game.year} 年 ${game.month === 12 ? 1 : game.month + 1} 月`, 'sys');
+
+    // 回合结束后检查赞助：若无赞助或已到期，触发选择窗口
+    setTimeout(() => {
+      setGame(prev => {
+        if (!prev.activeSponsor) {
+          setSponsorshipModalMode('selection');
+          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setShowSponsorshipModal(true);
+        } else if (prev.activeSponsor.remainingMonths <= 0) {
+          // 合同已到期，显示续期选项
+          const renewalOpts = generateRenewalOptions(prev.activeSponsor);
+          setSponsorshipRenewalOptions(renewalOpts);
+          setSponsorshipModalMode('expired');
+          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setShowSponsorshipModal(true);
+        }
+        return prev;
+      });
+    }, 100);
   };
 
   const selectSponsor = (sp: Sponsorship) => {
-    setGame(prev => ({ ...prev, activeSponsor: sp, money: prev.money + sp.signingBonus }));
-    setSponsorOptions([]); 
+    setGame(prev => ({ 
+      ...prev, 
+      activeSponsor: sp, 
+      money: prev.money + sp.signingBonus + (sp.paymentType === 'lump-sum' ? (sp.totalPay || 0) : 0)
+    }));
+    setSponsorOptions([]);
+    setShowSponsorshipModal(false);
+    setSponsorshipRenewalOptions([]);
     addLog(`签约赞助: ${sp.name}`, 'sys');
+  };
+
+  const handleSponsorshipModalClose = (selectedSponsor?: Sponsorship) => {
+    if (selectedSponsor) {
+      selectSponsor(selectedSponsor);
+    } else {
+      // 关闭模态框但不选择
+      setShowSponsorshipModal(false);
+      setSponsorshipRenewalOptions([]);
+    }
   };
 
   const buyItem = (item: Equipment) => {
@@ -674,6 +872,7 @@ const App: React.FC = () => {
   };
 
   const [showMatch, setShowMatch] = useState<{ event: GameEvent, idx: number } | null>(null);
+  const previousSponsorRef = useRef<Sponsorship | null>(null);
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
@@ -1076,7 +1275,11 @@ const App: React.FC = () => {
                          <div className="bg-slate-950 p-6 rounded-2xl border border-blue-500/30">
                             <p className="text-lg font-black text-white italic mb-2 tracking-tight">{game.activeSponsor.name}</p>
                             <div className="space-y-2">
-                               <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>月度收益</span><span className="text-emerald-400">¥{game.activeSponsor.monthlyPay.toLocaleString()}</span></div>
+                               {game.activeSponsor.paymentType === 'monthly' ? (
+                                 <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>月度收益</span><span className="text-emerald-400">¥{(game.activeSponsor.monthlyPay || 0).toLocaleString()}</span></div>
+                               ) : (
+                                 <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>总包收入</span><span className="text-emerald-400">¥{(game.activeSponsor.totalPay || 0).toLocaleString()}</span></div>
+                               )}
                                <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>剩余合约</span><span className="text-blue-400">{game.activeSponsor.remainingMonths} 个月</span></div>
                             </div>
                          </div>
@@ -1088,8 +1291,8 @@ const App: React.FC = () => {
                                   const disabled = game.fame < sp.minFame;
                                   return (
                                      <button key={sp.id} disabled={disabled} onClick={() => selectSponsor(sp)} className={`w-full p-4 rounded-xl border text-left transition-all ${disabled ? 'bg-slate-950 border-slate-800 opacity-30 cursor-not-allowed' : 'bg-slate-950 border-slate-800 hover:border-blue-500'}`}>
-                                        <div className="flex justify-between mb-1"><span className="text-xs font-black text-white">{sp.name}</span><span className="text-[8px] uppercase text-blue-400">{sp.type}</span></div>
-                                        <div className="flex justify-between text-[8px] text-slate-500 font-bold"><span>月薪: ¥{sp.monthlyPay}</span><span>签约金: ¥{sp.signingBonus}</span></div>
+                                       <div className="flex justify-between mb-1"><span className="text-xs font-black text-white">{sp.name}</span><span className="text-[8px] uppercase text-blue-400">{sp.tier}</span></div>
+                                       <div className="flex justify-between text-[8px] text-slate-500 font-bold"><span>{sp.paymentType === 'monthly' ? `月薪: ¥${(sp.monthlyPay||0)}` : `总包: ¥${(sp.totalPay||0)}`}</span><span>签约金: ¥{sp.signingBonus}</span></div>
                                         {disabled && <p className="text-[8px] text-red-500 mt-1 uppercase">需名望: {sp.minFame}</p>}
                                      </button>
                                   );
@@ -1136,6 +1339,115 @@ const App: React.FC = () => {
 
       {game.activeEvent && (
         <div className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500"><div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden"><div className={`absolute top-0 left-0 w-full h-1.5 ${game.activeEvent.event.type === 'positive' ? 'bg-emerald-500' : game.activeEvent.event.type === 'negative' ? 'bg-red-500' : 'bg-blue-500'}`}></div><h2 className="text-3xl font-black text-white italic mb-6 uppercase tracking-tighter text-center">{game.activeEvent.event.name}</h2><div className="bg-slate-950/50 p-8 rounded-[2rem] mb-8 text-left italic text-slate-300 font-serif text-sm leading-relaxed border border-slate-800">"{game.activeEvent.narrative}"</div><div className="mb-10 space-y-3"><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest text-center mb-4">属性变动</p><div className="grid grid-cols-2 gap-3">{Object.entries(game.activeEvent.event.effect).map(([key, val]) => { if (val === 0) return null; const labelMap: any = { tec: 'TEC', art: 'ART', sta: 'STA', money: '资金', fame: '名望', injuryMonths: '伤病', jump: 'JUMP', spin: 'SPIN', step: 'STEP', perf: 'PERF', endurance: 'END' }; const isPositive = (val as number) > 0; return ( <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 flex justify-between items-center"><span className="text-[10px] font-bold text-slate-400">{labelMap[key] || key}</span><span className={`font-black text-xs ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>{(val as number) > 0 ? '+' : ''}{val}</span></div> ); })}</div></div><button onClick={() => setGame(prev => ({ ...prev, activeEvent: null }))} className="w-full bg-white text-slate-950 py-5 rounded-2xl font-black text-xl active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认</button></div></div>
+      )}
+
+      {showSponsorshipModal && (
+        <div className="fixed inset-0 z-[210] bg-slate-950/95 backdrop-blur-2xl flex items-center justify-center p-8 animate-in fade-in duration-500">
+          <div className="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-[3rem] p-12 shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"></div>
+            
+            <h2 className="text-3xl font-black text-white italic mb-2 uppercase tracking-tighter text-center">
+              {sponsorshipModalMode === 'selection' ? '选择赞助商' : '赞助合约已到期'}
+            </h2>
+            <p className="text-[10px] text-slate-400 text-center mb-8 uppercase tracking-widest">
+              {sponsorshipModalMode === 'selection' 
+                ? '为你的职业生涯寻找合适的赞助商' 
+                : '续期现有合作或寻找新的赞助机会'}
+            </p>
+
+            {sponsorshipModalMode === 'expired' && sponsorshipRenewalOptions.length > 0 && (
+              <div className="mb-8 bg-slate-950/50 border border-blue-500/20 rounded-2xl p-6">
+                <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-4">💎 续期选项 (原赞助商享折扣)</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {sponsorshipRenewalOptions.map(renewal => (
+                    <button
+                      key={renewal.id}
+                      onClick={() => handleSponsorshipModalClose(renewal)}
+                      className="p-4 bg-slate-900 border-2 border-blue-500/30 hover:border-blue-500 rounded-2xl transition-all hover:scale-105 text-left group"
+                    >
+                      <p className="text-sm font-black text-white mb-2 group-hover:text-blue-400">{renewal.name}</p>
+                      <div className="space-y-1 text-[9px] text-slate-400">
+                        <p>周期: <span className="text-blue-400 font-bold">{renewal.duration}月</span></p>
+                        <p>签约金: <span className="text-emerald-400 font-bold">¥{renewal.signingBonus.toLocaleString()}</span></p>
+                        <p>月薪: <span className="text-emerald-400 font-bold">¥{renewal.monthlyPay.toLocaleString()}</span></p>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-slate-800">
+                        <span className="text-[8px] font-black text-amber-400">优惠15% + 续约奖励</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
+                {sponsorshipModalMode === 'expired' ? '其他赞助选项' : '可选赞助商'}
+              </p>
+              <div className="space-y-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                {sponsorOptions.map(sp => {
+                  const disabled = game.fame < sp.minFame;
+                  return (
+                    <button
+                      key={sp.id}
+                      disabled={disabled}
+                      onClick={() => handleSponsorshipModalClose(sp)}
+                      className={`w-full p-4 rounded-2xl border-2 text-left transition-all ${
+                        disabled
+                          ? 'bg-slate-950 border-slate-800 opacity-40 cursor-not-allowed'
+                          : 'bg-slate-950 border-slate-800 hover:border-purple-500 hover:scale-102'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-sm font-black text-white">{sp.name}</span>
+                        <span className={`text-[8px] font-black uppercase px-2 py-1 rounded ${
+                          sp.tier === 'local' ? 'bg-slate-700 text-slate-300' :
+                          sp.tier === 'brand' ? 'bg-blue-600/30 text-blue-400' :
+                          'bg-purple-600/30 text-purple-400'
+                        }`}>
+                          {sp.tier === 'local' ? '本地' : sp.tier === 'brand' ? '品牌' : '国际'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 text-[9px] text-slate-400 mb-3">
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">周期</p>
+                          <p className="text-white font-bold">{sp.duration}月</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">签约</p>
+                          <p className="text-emerald-400 font-bold">¥{sp.signingBonus.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 font-bold uppercase text-[8px]">支付形式</p>
+                          {sp.paymentType === 'monthly' ? (
+                            <p className="text-emerald-400 font-bold">月付 ¥{(sp.monthlyPay||0).toLocaleString()}</p>
+                          ) : (
+                            <p className="text-emerald-400 font-bold">总包 ¥{(sp.totalPay||0).toLocaleString()}</p>
+                          )}
+                        </div>
+                      </div>
+                      {disabled && (
+                        <p className="text-[8px] text-red-500 font-bold uppercase">需名望: {sp.minFame}</p>
+                      )}
+                    </button>
+                  );
+                })}
+                {sponsorOptions.length === 0 && (
+                  <p className="text-xs text-slate-600 text-center py-10 italic">暂无可用赞助商</p>
+                )}
+              </div>
+            </div>
+
+            {sponsorshipModalMode !== 'initial' && (
+              <button
+                onClick={() => handleSponsorshipModalClose()}
+                className="mt-8 w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-300 rounded-2xl font-black text-sm uppercase tracking-widest transition-all"
+              >
+                暂时跳过
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       {showMatch && (
