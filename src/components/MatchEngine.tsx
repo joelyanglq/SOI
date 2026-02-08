@@ -27,6 +27,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
   const [configStrategy, setConfigStrategy] = useState<ConfigStrategy>('balanced');
   const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [pendingQuickFinish, setPendingQuickFinish] = useState(false);
 
   const matchTemplate = MATCH_STRUCTURES[event.template] || MATCH_STRUCTURES['low'];
   const phases = matchTemplate.phases;
@@ -37,6 +38,13 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
       setProgramConfig(initialConfig);
     }
   }, []);
+
+  useEffect(() => {
+    if (pendingQuickFinish && stage === 'active' && !isProcessing) {
+      setPendingQuickFinish(false);
+      executeAllActions();
+    }
+  }, [pendingQuickFinish, stage]);
 
   useEffect(() => {
     let pool = aiSkaters.filter(ai => ai.injuryMonths === 0);
@@ -96,6 +104,41 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     } else {
       finishMatch(playerAccumulatedScore + finalScore);
     }
+  };
+
+  const executeAllActions = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+
+    let sta = playerMatchSta;
+    let totalScore = playerAccumulatedScore;
+    const newHistory: {name: string, score: number, desc: string, phaseName: string}[] = [];
+
+    for (let i = phaseIndex; i < programConfig.elements.length; i++) {
+      const element = programConfig.elements[i];
+      const action = getActionFromElement(element);
+      if (!action) continue;
+
+      const result = calculateActionScore(action, skater.attributes!, sta, true);
+      const score = result.score;
+      sta = clamp(sta - result.cost, 0, 100);
+      totalScore += score;
+
+      newHistory.push({
+        name: action.name,
+        score,
+        desc: result.isFail ? `摔倒 (GOE -5)` : `GOE ${result.goe > 0 ? '+' : ''}${result.goe.toFixed(1)}`,
+        phaseName: PHASE_META[action.type].name
+      });
+    }
+
+    setPlayerMatchSta(sta);
+    setPlayerAccumulatedScore(totalScore);
+    setHistory(prev => [...prev, ...newHistory]);
+    setPhaseIndex(programConfig.elements.length - 1);
+
+    await new Promise(r => setTimeout(r, 600));
+    finishMatch(totalScore);
   };
   
   const handleDragStart = (index: number) => {
@@ -265,6 +308,15 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   <button onClick={() => setStage('intro')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white px-8 py-4 rounded-2xl font-black transition-all">返回</button>
                   <button onClick={() => setStage('active')} className="flex-[2] bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-black text-xl transition-all active:scale-95">确认配置 · 开始比赛</button>
                 </div>
+                <button 
+                  onClick={() => { setPendingQuickFinish(true); setStage('active'); }}
+                  className="mt-3 w-full group bg-transparent hover:bg-slate-800/40 text-slate-500 hover:text-slate-300 py-3 rounded-xl font-bold text-xs transition-all border border-transparent hover:border-slate-800"
+                >
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="w-3.5 h-3.5 opacity-40 group-hover:opacity-70 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13 3l6 5-6 5" /><path strokeLinecap="round" strokeLinejoin="round" d="M7 3l6 5-6 5" /></svg>
+                    跳过演出 · 直接出分
+                  </span>
+                </button>
               </div>
             )}
 
@@ -346,7 +398,16 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                               <p className="text-sm text-slate-400 animate-pulse">执行中...</p>
                             </div>
                           ) : (
-                            <button onClick={executeConfiguredAction} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95">执行动作</button>
+                            <div className="space-y-3">
+                              <button onClick={executeConfiguredAction} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-6 rounded-2xl font-black text-2xl shadow-2xl transition-all active:scale-95">执行动作</button>
+                              <button onClick={executeAllActions} className="w-full group relative bg-slate-800/80 hover:bg-slate-700/90 text-slate-300 hover:text-white py-3.5 rounded-xl font-bold text-sm transition-all active:scale-[0.98] border border-slate-700/50 hover:border-slate-600">
+                                <span className="flex items-center justify-center gap-2">
+                                  <svg className="w-4 h-4 opacity-50 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7" /><path strokeLinecap="round" strokeLinejoin="round" d="M4 5l7 7-7 7" /></svg>
+                                  快速完赛
+                                  <span className="text-[10px] opacity-40 font-normal">跳过剩余 {programConfig.elements.length - phaseIndex} 个动作</span>
+                                </span>
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
