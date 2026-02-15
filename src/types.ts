@@ -40,6 +40,9 @@ export interface Skater {
   retired: boolean;
   id: string;
   activeProgram: Program;
+  mental: number;   // 心态: 0-100
+  stress: number;  // 压力: 0-100
+  public: number;   // 舆论: 0-100
 }
 
 export interface Equipment {
@@ -204,3 +207,41 @@ export interface ProgramConfig {
 }
 
 export type ConfigStrategy = 'conservative' | 'balanced' | 'aggressive' | 'custom';
+
+// Press Conference Types
+export type PressMediaType = 'isu' | 'tv' | 'magazine' | 'entertainment' | 'local';
+
+export interface PressReporter {
+  id: string;
+  name: string;
+  media: PressMediaType;
+  mediaName: string;
+  logo: string;
+}
+
+export interface PressAnswer {
+  text: string;
+  tone: 'confident' | 'humble' | 'honest' | 'aggressive';
+  icon: string;
+  effects: {
+    mental?: number;
+    stress?: number;
+    public?: number;
+    fame?: number;
+  };
+}
+
+export interface PressQuestion {
+  id: string;
+  reporter: PressReporter;
+  text: string;
+  answers: PressAnswer[];
+}
+
+export type MatchStage = 'intro' | 'config' | 'active' | 'results' | 'press';
+
+export interface HiddenStatsDelta {
+  mental: number;
+  stress: number;
+  public: number;
+}

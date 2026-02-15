@@ -35,7 +35,7 @@ export const simulateAIProgram = (skater: Skater, templateId: string): number =>
 
   template.phases.forEach(phase => {
     const bestAction = getBestActionForStats(phase, stats);
-    const res = calculateActionScore(bestAction, stats, currentSta, false);
+    const res = calculateActionScore(bestAction, stats, currentSta, false, skater.mental);
     totalScore += res.score;
     currentSta -= res.cost;
   });

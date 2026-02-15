@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, PlayerAttributes, Skater, Coach } from '../types';
 import { clamp, randNormal } from '../utils/math';
-import { STORAGE_KEY, MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR } from '../game/config';
+import { STORAGE_KEY, MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR, HIDDEN_STATS_INITIAL, STRESS_CHANGE, BURNOUT_CONFIG, MENTAL_CHANGE, PUBLIC_CHANGE, PUBLIC_CONFIG } from '../game/config';
 import { RANDOM_EVENTS } from '../game/data/events';
 import { CITIES } from '../game/data/equipment';
 import { LOADING_QUOTES } from '../data/text';
@@ -18,7 +18,10 @@ const INITIAL_SKATER: Skater = {
   attributes: { jump: 40, spin: 40, step: 40, perf: 30, endurance: 30 },
   pointsCurrent: 0, pointsLast: 0, rolling: 0, titles: [], honors: [], pQual: 1.0, pAge: 0,
   injuryMonths: 0, isPlayer: true, retired: false,
-  activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
+  activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 },
+  mental: HIDDEN_STATS_INITIAL.mental,
+  stress: HIDDEN_STATS_INITIAL.stress,
+  public: HIDDEN_STATS_INITIAL.public,
 };
 
 const DEFAULT_SCHEDULE: TrainingTaskType[] = ['rest', 'rest', 'rest', 'rest', 'rest', 'rest', 'rest'];
@@ -86,9 +89,9 @@ export function useGameState() {
 
   useEffect(() => {
     if (!game.activeSponsor && sponsorOptions.length === 0 && !isNaming) {
-      setSponsorOptions(generateSponsorshipOptions(game.fame));
+      setSponsorOptions(generateSponsorshipOptions(game.fame, game.skater.public));
     }
-  }, [game.activeSponsor, game.fame, isNaming]);
+  }, [game.activeSponsor, game.fame, game.skater.public, isNaming]);
 
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(game)); }, [game]);
 
@@ -116,8 +119,8 @@ export function useGameState() {
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance);
-  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes]);
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.stress);
+  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes, game.skater.stress]);
 
   const displayAttributes = useMemo(() => {
     if (!game.skater.attributes) return null;
@@ -214,7 +217,7 @@ export function useGameState() {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
       
-      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance);
+      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance, prev.skater.stress);
 
       const currentBaseAttrs = { ...prev.skater.attributes! };
       const attrKeys = Object.keys(currentBaseAttrs) as (keyof PlayerAttributes)[];
@@ -264,6 +267,55 @@ export function useGameState() {
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
       }
 
+      // --- 隐藏属性变化逻辑 ---
+      // 压力变化：基于训练槽位数
+      const trainingCount = prev.schedule.filter(t => t !== 'rest').length;
+      let stressChange = 0;
+      if (trainingCount >= 7) stressChange = STRESS_CHANGE.maxTraining;
+      else if (trainingCount >= 6) stressChange = STRESS_CHANGE.highTraining;
+      else if (trainingCount >= 5) stressChange = STRESS_CHANGE.normalTraining;
+      else stressChange = STRESS_CHANGE.lowTraining;
+
+      // 参加比赛增加压力
+      if (prev.hasCompeted) stressChange += STRESS_CHANGE.competition;
+
+      // 休息减少压力
+      const restCount = prev.schedule.filter(t => t === 'rest').length;
+      if (restCount > 0) stressChange += STRESS_CHANGE.rest * restCount;
+
+      // 负面随机事件增加压力
+      if (triggeredEvent && triggeredEvent.type === 'negative') stressChange += STRESS_CHANGE.negativeEvent;
+
+      // 训练过度减少心态
+      if (finalSta < 20) stressChange += MENTAL_CHANGE.overtraining;
+
+      let newStress = clamp(prev.skater.stress + stressChange, 0, 100);
+      let newMental = prev.skater.mental;
+      let newPublic = prev.skater.public;
+
+      // Burnout 机制：压力满时属性可能下降
+      if (newStress >= BURNOUT_CONFIG.maxThreshold && Math.random() < BURNOUT_CONFIG.declineChance) {
+        const attrKeys = Object.keys(currentBaseAttrs) as (keyof PlayerAttributes)[];
+        const randomAttr = attrKeys[Math.floor(Math.random() * attrKeys.length)] as keyof PlayerAttributes;
+        currentBaseAttrs[randomAttr] = Math.max(0, currentBaseAttrs[randomAttr] - 1);
+        setTimeout(() => addLog("由于过度疲劳，属性出现了下降！", 'event'), 300);
+      }
+
+      // 随机事件影响心态和舆论
+      if (triggeredEvent) {
+        if (triggeredEvent.type === 'positive') {
+          newPublic = clamp(newPublic + PUBLIC_CHANGE.positiveEvent, 0, 100);
+        } else if (triggeredEvent.type === 'negative') {
+          newPublic = clamp(newPublic + PUBLIC_CHANGE.negativeEvent, 0, 100);
+          newMental = clamp(newMental - 5, 0, 100);
+        }
+      }
+
+      // 更新隐藏属性
+      updatedSkater.stress = newStress;
+      updatedSkater.mental = newMental;
+      updatedSkater.public = newPublic;
+
       const totalAttrs = getTotalAttributes(updatedSkater.attributes!, remainingInventory);
       const derived = calcDerivedStats(totalAttrs);
       
@@ -304,7 +356,10 @@ export function useGameState() {
             attributes: newAiStats,
             sta: 100, isPlayer: false, retired: false,
             pointsLast: 0, pointsCurrent: 0, rolling: 0, titles: [], honors: [], pQual: 1, pAge: 0, injuryMonths: 0,
-            activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 }
+            activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 },
+            mental: 50 + Math.random() * 30,
+            stress: 20 + Math.random() * 40,
+            public: 40 + Math.random() * 40,
           };
           return { ...newAi, rolling: calculateRolling(newAi) };
         }
@@ -364,6 +419,23 @@ export function useGameState() {
         setTimeout(() => addLog("由于过度疲劳，部分训练效果严重受损！请务必安排休息。", 'event'), 300);
       }
 
+      // 隐藏属性警告日志
+      if (newStress > BURNOUT_CONFIG.warningThreshold) {
+        setTimeout(() => addLog("选手压力过大，需要调整训练强度！", 'event'), 300);
+      }
+      if (newMental < 20) {
+        setTimeout(() => addLog("选手心态接近崩溃，需要关注心理状态！", 'event'), 300);
+      }
+      if (newPublic < PUBLIC_CONFIG.crisisThreshold) {
+        setTimeout(() => addLog("舆论危机！可能影响赞助合作！", 'event'), 300);
+      }
+
+      // 舆论危机可能导致赞助商解约
+      if (updatedSponsor && newPublic < PUBLIC_CONFIG.crisisThreshold && Math.random() < PUBLIC_CONFIG.terminationChance) {
+        setTimeout(() => addLog("赞助商因舆论问题提前解约！", 'sys'), 300);
+        updatedSponsor = null;
+      }
+
       const tecGain = updatedSkater.tec - prev.skater.tec;
       const artGain = updatedSkater.art - prev.skater.art;
 
@@ -385,13 +457,13 @@ export function useGameState() {
       setGame(prev => {
         if (!prev.activeSponsor) {
           setSponsorshipModalMode('selection');
-          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setSponsorOptions(generateSponsorshipOptions(prev.fame, prev.skater.public));
           setShowSponsorshipModal(true);
         } else if (prev.activeSponsor.remainingMonths <= 0) {
           const renewalOpts = generateRenewalOptions(prev.activeSponsor);
           setSponsorshipRenewalOptions(renewalOpts);
           setSponsorshipModalMode('expired');
-          setSponsorOptions(generateSponsorshipOptions(prev.fame));
+          setSponsorOptions(generateSponsorshipOptions(prev.fame, prev.skater.public));
           setShowSponsorshipModal(true);
         }
         return prev;

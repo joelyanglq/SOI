@@ -1,13 +1,15 @@
 import { MatchAction, PlayerAttributes, MatchPhaseType } from '../types';
 import { PHASE_META } from './data/actions';
 import { clamp } from '../utils/math';
+import { MENTAL_MULTIPLIERS, MENTAL_PEAK_GOE_BONUS } from './config';
 
 // ISU-Compliant Score Calculator (Base Value + GOE)
 export const calculateActionScore = (
   action: MatchAction, 
   stats: PlayerAttributes, 
   currentSta: number, 
-  isPlayer: boolean
+  isPlayer: boolean,
+  mental: number = 60
 ): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number, goe: number } => {
   
   // Stamina Cost (Endurance reduces cost by up to 40%)
@@ -22,8 +24,13 @@ export const calculateActionScore = (
   const attrAvg = attrSum / meta.relevantAttrs.length;
 
   // Failure Chance (Based on risk and attributes)
+  // 心态紧绷或崩溃时，首个动作失误率增加
+  let failChanceModifier = 1.0;
+  if (mental < 20) failChanceModifier = 1.5;
+  else if (mental < 40) failChanceModifier = 1.25;
+  
   const baseFailChance = clamp((action.risk * 100) - (attrAvg * 0.6), 2, 90);
-  const failChance = isPlayer ? baseFailChance : baseFailChance * 0.4; // AI more consistent
+  const failChance = isPlayer ? baseFailChance * failChanceModifier : baseFailChance * 0.4; // AI more consistent
   const isFail = Math.random() * 100 < failChance;
 
   // Fatigue Factor (Stamina < 30 affects execution)
@@ -41,7 +48,13 @@ export const calculateActionScore = (
   } else {
     const skillFactor = (attrAvg - 40) / 12;
     const fatiguePenalty = (1 - fatigueFactor) * -8;
-    const randomness = (Math.random() - 0.5) * 1.5;
+    let randomness = (Math.random() - 0.5) * 1.5;
+    
+    // 心态巅峰时，GOE 额外波动加成
+    if (mental >= 90) {
+      randomness += MENTAL_PEAK_GOE_BONUS.min + Math.random() * (MENTAL_PEAK_GOE_BONUS.max - MENTAL_PEAK_GOE_BONUS.min);
+    }
+    
     goeGrade = clamp(skillFactor + fatiguePenalty + randomness, -4, 5);
   }
   
@@ -51,7 +64,16 @@ export const calculateActionScore = (
   // PCS-like component based on perf attribute
   const pcsBonus = (stats.perf || 30) * 0.03;
   
-  const finalScore = Math.max(0, elementScore + pcsBonus);
+  let finalScore = Math.max(0, elementScore + pcsBonus);
+  
+  // 心态系数
+  let mentalMultiplier = MENTAL_MULTIPLIERS.normal;
+  if (mental >= 90) mentalMultiplier = MENTAL_MULTIPLIERS.peak;
+  else if (mental >= 40) mentalMultiplier = MENTAL_MULTIPLIERS.normal;
+  else if (mental >= 20) mentalMultiplier = MENTAL_MULTIPLIERS.tight;
+  else mentalMultiplier = MENTAL_MULTIPLIERS.broken;
+  
+  finalScore = finalScore * mentalMultiplier;
 
   return { 
     score: finalScore, 

@@ -125,6 +125,18 @@ const App: React.FC = () => {
         <MatchEngine 
           key={`match-${gs.showMatch.event.name}-${Date.now()}`}
           event={gs.showMatch.event} skater={gs.game.skater} aiSkaters={gs.game.aiSkaters}
+          onMatchEnd={(rank, hasFall, playerScore, hiddenStatsDelta) => {
+            // Update hidden stats from press conference and match results
+            gs.setGame(prev => ({
+              ...prev,
+              skater: {
+                ...prev.skater,
+                mental: hiddenStatsDelta.mental,
+                stress: hiddenStatsDelta.stress,
+                public: hiddenStatsDelta.public,
+              }
+            }));
+          }}
           onClose={(results) => {
             const rank = results.findIndex((r: any) => r.isPlayer) + 1;
             const pts = Math.floor(gs.showMatch!.event.pts / (rank * 0.4 + 0.6));

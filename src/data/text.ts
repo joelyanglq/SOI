@@ -1,3 +1,5 @@
+import { PressReporter } from '../types';
+
 export const LOADING_QUOTES = [
   "正在打磨冰刀，极致的锋利是稳定的基础。",
   "四周跳不仅是技术，更是对地心引力的宣战。",
@@ -62,6 +64,111 @@ export const COMMENTARY_CORPUS = {
     "精神状态稍显紧张，但整体完成度还算稳妥，继续打磨。",
     "今天的表现提醒我们，比赛不仅仅是技巧，更是心理和策略的较量。"
   ]
+};
+
+// Press Conference - Reporters
+export const REPORTERS_POOL: Omit<PressReporter, 'id'>[] = [
+  { name: '亚历山大·沃尔科夫', media: 'isu', mediaName: 'ISU 官方时报', logo: '📰' },
+  { name: '莎拉·约翰逊', media: 'tv', mediaName: '体育电视台', logo: '📺' },
+  { name: '田中美纪', media: 'magazine', mediaName: '专业花滑杂志', logo: '📓' },
+  { name: '詹姆斯·布朗', media: 'entertainment', mediaName: '娱乐周刊', logo: '🎬' },
+  { name: '张明', media: 'local', mediaName: '当地媒体', logo: '🏢' },
+  { name: '伊娃·安德森', media: 'isu', mediaName: 'ISU 官方时报', logo: '📰' },
+  { name: '朴泰俊', media: 'tv', mediaName: '体育电视台', logo: '📺' },
+];
+
+// Press Conference - Questions by category
+export const PRESS_QUESTIONS = {
+  gold: [
+    "首次夺得冠军，感觉如何？这对你意味着什么？",
+    "职业生涯首个世界冠军，这个时刻你准备了多久？",
+    "下一个目标是什么？会冲击奥运金牌吗？",
+    "全场观众都在为你欢呼，你有什么想对他们说的？",
+  ],
+  fail: [
+    "那个失误会影响你后续的心态吗？",
+    "是什么原因导致了今天的失误？",
+    "如何调整状态迎接下一场比赛？",
+    "这次失败会让你重新审视自己吗？",
+  ],
+  general: [
+    "今天的比赛感觉如何？",
+    "对自己的表现满意吗？",
+    "接下来有什么训练计划？",
+    "如何评价今天的发挥？",
+  ],
+  tech: [
+    "跳跃训练有什么秘诀吗？",
+    "3A现在越来越稳定了，有考虑冲击4T吗？",
+    "技术动作上还有哪些想要提升的？",
+    "对于高难度跳跃的训练，有什么心得？",
+  ],
+  art: [
+    "这套节目的编排理念是什么？",
+    "音乐选择有什么特别的意义吗？",
+    "如何提升在冰面上的表现力？",
+    "这次的艺术展现符合你的预期吗？",
+  ],
+  mental: [
+    "如何应对比赛前的紧张情绪？",
+    "赛前会感到焦虑吗？",
+    "有什么调节心态的方法可以分享？",
+    "面对大赛压力，如何保持专注？",
+  ],
+  stress: [
+    "外界期望会带来压力吗？",
+    "如何平衡高强度训练和日常生活？",
+    "有想过放弃的时候吗？",
+    "面对伤病和挫折，如何调整？",
+  ],
+  public: [
+    "对最近的媒体有什么看法？",
+    "如何面对负面评论？",
+    "会关注社交媒体上的评价吗？",
+    "作为公众人物，有什么想对粉丝说的？",
+  ],
+  entertainment: [
+    "平时除了训练，还喜欢做什么？",
+    "有没有考虑过退役后的发展？",
+    "感情生活有什么可以分享的吗？",
+    "商业代言方面有什么计划？",
+  ],
+};
+
+// Press Conference - Answer Templates
+export const PRESS_ANSWER_TEMPLATES = {
+  confident: [
+    { text: "我付出了全部努力，这是应得的回报！", icon: "💪", effects: { mental: 12, public: -3 } },
+    { text: "我就是为了冠军而来的，今天证明了实力！", icon: "🏆", effects: { mental: 15, public: -5 } },
+    { text: "这是我的时刻，我值得这一切！", icon: "✨", effects: { mental: 10, public: -2 } },
+  ],
+  humble: [
+    { text: "感谢大家的支持，我会继续努力的！", icon: "🙏", effects: { mental: 3, public: 8 } },
+    { text: "还有很多需要学习的地方，感谢大家。", icon: "📚", effects: { mental: 5, public: 5 } },
+    { text: "这只是开始，我会继续挑战自我。", icon: "🌟", effects: { mental: 4, public: 6 } },
+  ],
+  honest: [
+    { text: "确实很紧张，但我会努力调整好心态。", icon: "😰", effects: { mental: 8, stress: -12 } },
+    { text: "状态不太好，我需要休息调整一下。", icon: "😴", effects: { mental: 5, stress: -15, public: 3 } },
+    { text: "今天确实不在最佳状态，但我会继续努力。", icon: "💪", effects: { mental: 6, stress: -8 } },
+  ],
+  aggressive: [
+    { text: "我会用实力证明一切质疑都是错的！", icon: "🔥", effects: { mental: 20, public: -15 } },
+    { text: "没有人能阻止我前进的脚步！", icon: "⚡", effects: { mental: 18, public: -12 } },
+  ],
+};
+
+// Media availability by event level
+export const PRESS_MEDIA_BY_LEVEL = {
+  low: ['local', 'local', 'isu'],
+  mid: ['local', 'isu', 'tv'],
+  high: ['isu', 'tv', 'magazine', 'entertainment', 'local'],
+};
+
+export const QUESTION_COUNT_BY_LEVEL = {
+  low: { min: 2, max: 3 },
+  mid: { min: 3, max: 4 },
+  high: { min: 4, max: 5 },
 };
 
 export const EVENT_NARRATIVES: Record<string, string[]> = {

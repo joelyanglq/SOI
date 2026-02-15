@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType } from '../types';
+import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType, PressQuestion, PressAnswer, HiddenStatsDelta, MatchStage } from '../types';
 import { MATCH_STRUCTURES, PHASE_META, ACTION_LIBRARY, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk } from '../game/data/actions';
 import { calculateActionScore } from '../game/scoring';
 import { simulateAIProgram } from '../game/match';
-import { generateLocalCommentary } from '../game/events';
+import { generateLocalCommentary, generatePressConference, applyPressEffect } from '../game/events';
 import { clamp } from '../utils/math';
 
 interface MatchEngineProps {
@@ -11,10 +11,11 @@ interface MatchEngineProps {
   skater: Skater;
   aiSkaters: Skater[];
   onClose: (results: any[]) => void;
+  onMatchEnd?: (rank: number, hasFall: boolean, playerScore: number, hiddenStatsDelta: HiddenStatsDelta) => void;
 }
 
-const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onClose }) => {
-  const [stage, setStage] = useState<'intro' | 'config' | 'active' | 'results'>('intro');
+const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onClose, onMatchEnd }) => {
+  const [stage, setStage] = useState<MatchStage>('intro');
   const [phaseIndex, setPhaseIndex] = useState(0); 
   const [participants, setParticipants] = useState<any[]>([]);
   const [commentary, setCommentary] = useState<string>("广播中：下一位选手请进入场地...");
@@ -22,12 +23,20 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
   const [playerMatchSta, setPlayerMatchSta] = useState(0);
   const [playerAccumulatedScore, setPlayerAccumulatedScore] = useState(0);
   const [history, setHistory] = useState<{name: string, score: number, desc: string, phaseName: string}[]>([]);
+  const [hasFallen, setHasFallen] = useState(false);
   
   const [programConfig, setProgramConfig] = useState<ProgramConfig>({ elements: [] });
   const [configStrategy, setConfigStrategy] = useState<ConfigStrategy>('balanced');
   const [editingElementIndex, setEditingElementIndex] = useState<number | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [pendingQuickFinish, setPendingQuickFinish] = useState(false);
+  
+  // Press conference state
+  const [pressQuestions, setPressQuestions] = useState<PressQuestion[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [selectedAnswer, setSelectedAnswer] = useState<PressAnswer | null>(null);
+  const [showEffect, setShowEffect] = useState(false);
+  const [accumulatedEffects, setAccumulatedEffects] = useState<HiddenStatsDelta>({ mental: 0, stress: 0, public: 0 });
 
   const matchTemplate = MATCH_STRUCTURES[event.template] || MATCH_STRUCTURES['low'];
   const phases = matchTemplate.phases;
@@ -83,7 +92,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     setIsProcessing(true);
     await new Promise(r => setTimeout(r, 800));
 
-    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true);
+    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true, skater.mental);
 
     const nextSta = clamp(playerMatchSta - result.cost, 0, 100);
     const finalScore = result.score;
@@ -119,7 +128,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
       const action = getActionFromElement(element);
       if (!action) continue;
 
-      const result = calculateActionScore(action, skater.attributes!, sta, true);
+      const result = calculateActionScore(action, skater.attributes!, sta, true, skater.mental);
       const score = result.score;
       sta = clamp(sta - result.cost, 0, 100);
       totalScore += score;
@@ -172,6 +181,11 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     const pRank = sortedRes.findIndex(r => r.isPlayer) + 1;
     setParticipants(finalParticipants);
     setCommentary(generateLocalCommentary(pRank));
+    
+    // Check if player had any falls
+    const didFall = history.some(h => h.desc.includes('摔倒'));
+    setHasFallen(didFall);
+    
     setStage('results');
     setIsProcessing(false);
   };
@@ -362,7 +376,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                     const currentAction = getActionFromElement(activeElement);
                     if (!currentAction) return <p className="text-red-400">动作未找到</p>;
                     
-                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true);
+                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true, skater.mental);
                     
                     return (
                       <div className="w-full max-w-xl animate-in zoom-in duration-500">
@@ -433,7 +447,211 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   </div>
                 </div>
                 <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
-                <button onClick={() => onClose(sorted)} className="bg-white text-slate-950 px-24 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认排名</button>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => {
+                      const eventLevel = event.template as 'low' | 'mid' | 'high';
+                      const questions = generatePressConference(
+                        playerRank,
+                        hasFallen,
+                        skater.tec,
+                        skater.art,
+                        skater.mental,
+                        skater.stress,
+                        skater.public,
+                        eventLevel
+                      );
+                      setPressQuestions(questions);
+                      setCurrentQuestionIndex(0);
+                      setAccumulatedEffects({ mental: 0, stress: 0, public: 0 });
+                      setStage('press');
+                    }} 
+                    className="bg-blue-600 text-white px-12 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all shadow-xl"
+                  >
+                    赛后采访
+                  </button>
+                  <button 
+                    onClick={() => {
+                      // Apply post-match effects immediately when skipping
+                      let delta = { mental: 0, stress: 0, public: 0 };
+                      if (playerRank === 1) {
+                        delta.mental += 15;
+                        delta.public += 20;
+                      }
+                      if (hasFallen) {
+                        delta.mental -= 10;
+                        delta.stress += 10;
+                        delta.public -= 5;
+                      }
+                      if (onMatchEnd) {
+                        onMatchEnd(playerRank, hasFallen, playerAccumulatedScore, delta);
+                      }
+                      onClose(sorted);
+                    }} 
+                    className="bg-slate-700 text-slate-300 px-12 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all"
+                  >
+                    跳过
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {stage === 'press' && pressQuestions.length > 0 && (
+              <div className="flex-1 flex flex-col animate-in fade-in duration-500">
+                {/* Flash effect */}
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  <span className="absolute top-20 left-20 text-4xl animate-pulse">📷</span>
+                  <span className="absolute top-40 right-32 text-3xl animate-pulse delay-75">📷</span>
+                  <span className="absolute bottom-40 left-1/3 text-3xl animate-pulse delay-150">📷</span>
+                </div>
+
+                {/* Progress */}
+                <div className="flex justify-center items-center gap-2 mb-8">
+                  {pressQuestions.map((_, idx) => (
+                    <div 
+                      key={idx}
+                      className={`w-3 h-3 rounded-full transition-all ${
+                        idx < currentQuestionIndex ? 'bg-emerald-500' : 
+                        idx === currentQuestionIndex ? 'bg-blue-500 scale-125' : 'bg-slate-700'
+                      }`}
+                    />
+                  ))}
+                </div>
+
+                {/* Current Question */}
+                {pressQuestions[currentQuestionIndex] && (
+                  <div className="flex-1 flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
+                    {/* Reporter */}
+                    <div className="flex items-center gap-4 mb-8 bg-slate-800/50 px-6 py-4 rounded-full">
+                      <span className="text-4xl">{pressQuestions[currentQuestionIndex].reporter.logo}</span>
+                      <div className="text-left">
+                        <p className="text-xs text-slate-400 uppercase tracking-wider">{pressQuestions[currentQuestionIndex].reporter.mediaName}</p>
+                        <p className="text-white font-bold">{pressQuestions[currentQuestionIndex].reporter.name}</p>
+                      </div>
+                      <span className="text-blue-400 animate-pulse ml-4">🎤</span>
+                    </div>
+
+                    {/* Question */}
+                    <div className="bg-slate-900/80 border-2 border-slate-700 rounded-3xl p-8 mb-8 w-full text-center">
+                      <p className="text-2xl text-white font-bold italic">"{pressQuestions[currentQuestionIndex].text}"</p>
+                    </div>
+
+                    {/* Effect display */}
+                    {showEffect && selectedAnswer && (
+                      <div className="mb-6 flex gap-3 animate-in slide-in-from-top duration-300">
+                        {selectedAnswer.effects.mental !== 0 && (
+                          <span className={`px-4 py-2 rounded-full text-sm font-bold ${selectedAnswer.effects.mental > 0 ? 'bg-emerald-900/50 text-emerald-400' : 'bg-red-900/50 text-red-400'}`}>
+                            心态 {selectedAnswer.effects.mental > 0 ? '+' : ''}{selectedAnswer.effects.mental}
+                          </span>
+                        )}
+                        {selectedAnswer.effects.stress !== 0 && (
+                          <span className={`px-4 py-2 rounded-full text-sm font-bold ${selectedAnswer.effects.stress < 0 ? 'bg-emerald-900/50 text-emerald-400' : 'bg-red-900/50 text-red-400'}`}>
+                            压力 {selectedAnswer.effects.stress > 0 ? '+' : ''}{selectedAnswer.effects.stress}
+                          </span>
+                        )}
+                        {selectedAnswer.effects.public !== 0 && (
+                          <span className={`px-4 py-2 rounded-full text-sm font-bold ${selectedAnswer.effects.public > 0 ? 'bg-emerald-900/50 text-emerald-400' : 'bg-red-900/50 text-red-400'}`}>
+                            舆论 {selectedAnswer.effects.public > 0 ? '+' : ''}{selectedAnswer.effects.public}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Answer options */}
+                    {!showEffect ? (
+                      <div className="grid grid-cols-1 gap-4 w-full max-w-2xl">
+                        {pressQuestions[currentQuestionIndex].answers.map((answer, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setSelectedAnswer(answer);
+                              setShowEffect(true);
+                              
+                              // Update accumulated effects
+                              const newEffects = {
+                                mental: accumulatedEffects.mental + (answer.effects.mental || 0),
+                                stress: accumulatedEffects.stress + (answer.effects.stress || 0),
+                                public: accumulatedEffects.public + (answer.effects.public || 0),
+                              };
+                              setAccumulatedEffects(newEffects);
+                              
+                              // Move to next question after delay
+                              setTimeout(() => {
+                                if (currentQuestionIndex < pressQuestions.length - 1) {
+                                  setCurrentQuestionIndex(prev => prev + 1);
+                                  setSelectedAnswer(null);
+                                  setShowEffect(false);
+                                } else {
+                                  // Press conference finished
+                                  const finalDelta = {
+                                    mental: accumulatedEffects.mental + (answer.effects.mental || 0),
+                                    stress: accumulatedEffects.stress + (answer.effects.stress || 0),
+                                    public: accumulatedEffects.public + (answer.effects.public || 0),
+                                  };
+                                  // Add match result effects
+                                  if (playerRank === 1) {
+                                    finalDelta.mental += 15;
+                                    finalDelta.public += 20;
+                                  }
+                                  if (hasFallen) {
+                                    finalDelta.mental -= 10;
+                                    finalDelta.stress += 10;
+                                    finalDelta.public -= 5;
+                                  }
+                                  if (onMatchEnd) {
+                                    onMatchEnd(playerRank, hasFallen, playerAccumulatedScore, finalDelta);
+                                  }
+                                  onClose(sorted);
+                                }
+                              }, 1200);
+                            }}
+                            className="bg-slate-800 hover:bg-slate-700 border-2 border-slate-700 hover:border-blue-500 p-6 rounded-2xl transition-all flex items-center gap-4 text-left group"
+                          >
+                            <span className="text-3xl">{answer.icon}</span>
+                            <span className="text-white font-bold text-lg flex-1">{answer.text}</span>
+                            <span className={`text-xs px-3 py-1 rounded-full ${
+                              answer.tone === 'confident' ? 'bg-amber-900/50 text-amber-400' :
+                              answer.tone === 'humble' ? 'bg-blue-900/50 text-blue-400' :
+                              answer.tone === 'honest' ? 'bg-purple-900/50 text-purple-400' :
+                              'bg-red-900/50 text-red-400'
+                            }`}>
+                              {answer.tone === 'confident' ? '自信' : 
+                               answer.tone === 'humble' ? '谦逊' : 
+                               answer.tone === 'honest' ? '坦诚' : '强势'}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-slate-500 text-lg animate-pulse">请稍候...</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Skip button */}
+                <div className="mt-8 text-center">
+                  <button 
+                    onClick={() => {
+                      const finalDelta = { ...accumulatedEffects };
+                      if (playerRank === 1) {
+                        finalDelta.mental += 15;
+                        finalDelta.public += 20;
+                      }
+                      if (hasFallen) {
+                        finalDelta.mental -= 10;
+                        finalDelta.stress += 10;
+                        finalDelta.public -= 5;
+                      }
+                      if (onMatchEnd) {
+                        onMatchEnd(playerRank, hasFallen, playerAccumulatedScore, finalDelta);
+                      }
+                      onClose(sorted);
+                    }}
+                    className="text-slate-500 hover:text-slate-300 text-sm font-bold transition-colors"
+                  >
+                    跳过剩余问题
+                  </button>
+                </div>
               </div>
             )}
           </div>

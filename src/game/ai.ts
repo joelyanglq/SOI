@@ -2,6 +2,7 @@ import { Skater } from '../types';
 import { randNormal } from '../utils/math';
 import { SURNAME, GIVEN } from './data/equipment';
 import { calculateRolling } from './ranking';
+import { HIDDEN_STATS_INITIAL } from './config';
 
 export const generateInitialAI = (): Skater[] => {
   return Array.from({ length: 150 }).map((_, i) => {
@@ -28,7 +29,10 @@ export const generateInitialAI = (): Skater[] => {
       pointsLast: initialPoints, 
       titles: [], honors: [], pQual: 1.0, pAge: 0, injuryMonths: 0, 
       isPlayer: false, retired: false,
-      activeProgram: { name: "AI Program", baseArt: 35, freshness: 100 }
+      activeProgram: { name: "AI Program", baseArt: 35, freshness: 100 },
+      mental: 50 + Math.random() * 30,
+      stress: 20 + Math.random() * 40,
+      public: 40 + Math.random() * 40,
     };
     return { ...s, rolling: calculateRolling(s) };
   });

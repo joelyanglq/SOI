@@ -1,6 +1,7 @@
 import { Sponsorship, Equipment, Coach } from '../types';
 import { SURNAME, GIVEN, EQUIP_NAMES, CHOREO_NAMES } from './data/equipment';
 import { COACHES } from './data/events';
+import { PUBLIC_CONFIG } from './config';
 
 // Sponsorship generation configs
 const tierConfig = {
@@ -73,28 +74,48 @@ const weightedPick = <T extends { months?: number, weight?: number }>(arr: T[]) 
   return arr[arr.length - 1];
 };
 
-export const generateSponsorshipOptions = (fame: number): Sponsorship[] => {
+export const generateSponsorshipOptions = (fame: number, publicScore: number = 50): Sponsorship[] => {
   const options: Sponsorship[] = [];
   const tiers: Array<keyof typeof tierConfig> = ['local','brand','global'];
+  
+  // 舆论影响 tier 概率
+  let globalThreshold = 0.50;
+  let brandThreshold = 0.35;
+  if (publicScore > PUBLIC_CONFIG.positiveThreshold) {
+    globalThreshold -= 0.15; // 正面舆论更容易出现高级赞助
+    brandThreshold -= 0.10;
+  } else if (publicScore < PUBLIC_CONFIG.negativeThreshold) {
+    globalThreshold += 0.15; // 负面舆论减少高级赞助
+    brandThreshold += 0.10;
+  }
+  
+  // 舆论金额乘数
+  let publicMultiplier = 1.0;
+  if (publicScore > PUBLIC_CONFIG.positiveThreshold) {
+    publicMultiplier = 1 + PUBLIC_CONFIG.sponsorshipBonus;
+  } else if (publicScore < PUBLIC_CONFIG.negativeThreshold) {
+    publicMultiplier = 1 - PUBLIC_CONFIG.sponsorshipPenalty;
+  }
+
   for (let i = 0; i < 4; i++) {
     let tier: keyof typeof tierConfig = 'local';
     const roll = Math.random();
-    if (fame > 1000 && roll > 0.50) tier = 'global';
-    else if (fame > 300 && roll > 0.35) tier = 'brand';
+    if (fame > 1000 && roll > globalThreshold) tier = 'global';
+    else if (fame > 300 && roll > brandThreshold) tier = 'brand';
 
     const cfg = tierConfig[tier];
     const name = cfg.names[Math.floor(Math.random() * cfg.names.length)];
     const durationPick = weightedPick(durationOptions) as { months: number };
     const duration = durationPick.months;
     const paymentType = paymentTypeRoll();
-    const signingBonus = Math.floor(cfg.baseSigningBonus * (0.85 + Math.random() * 0.3));
+    const signingBonus = Math.floor(cfg.baseSigningBonus * (0.85 + Math.random() * 0.3) * publicMultiplier);
 
     let monthlyPay: number | undefined = undefined;
     let totalPay: number | undefined = undefined;
     if (paymentType === 'monthly') {
-      monthlyPay = Math.floor(cfg.baseMonthlyPay * (0.90 + Math.random() * 0.3));
+      monthlyPay = Math.floor(cfg.baseMonthlyPay * (0.90 + Math.random() * 0.3) * publicMultiplier);
     } else {
-      totalPay = Math.floor(cfg.baseLumpPerMonth * duration * (0.85 + Math.random() * 0.3));
+      totalPay = Math.floor(cfg.baseLumpPerMonth * duration * (0.85 + Math.random() * 0.3) * publicMultiplier);
     }
 
     options.push({
