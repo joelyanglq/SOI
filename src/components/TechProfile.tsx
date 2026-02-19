@@ -22,10 +22,166 @@ const RotDots: React.FC<{ n: number }> = ({ n }) => (
   </span>
 );
 
+/* ── Detail Modal (Instagram-style overlay) ── */
+const DetailModal: React.FC<{ onClose: () => void; title: string; accent: string; children: React.ReactNode }> = ({ onClose, title, accent, children }) => (
+  <div className="fixed inset-0 z-[200] flex items-center justify-center" onClick={onClose}>
+    {/* backdrop */}
+    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" />
+    {/* card */}
+    <div
+      onClick={e => e.stopPropagation()}
+      className="relative z-10 w-[420px] max-h-[80vh] bg-slate-900 border border-slate-700/60 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 fade-in duration-200"
+    >
+      {/* modal header */}
+      <div className={`flex items-center justify-between px-6 py-4 border-b border-slate-800 shrink-0`}>
+        <h3 className={`text-base font-black ${accent}`}>{title}</h3>
+        <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-lg transition-all">×</button>
+      </div>
+      {/* modal body */}
+      <div className="flex-1 overflow-y-auto px-6 py-5 custom-scrollbar">
+        {children}
+      </div>
+    </div>
+  </div>
+);
+
+/* ── Jump Detail Content ── */
+const JumpDetail: React.FC<{ jt: JumpType; technique: NonNullable<GameState['skater']['technique']>; displayAttributes: PlayerAttributes | null }> = ({ jt, technique, displayAttributes }) => {
+  const card = technique.jumps[jt];
+  const maxRot = card?.maxRotation || 1;
+
+  return (
+    <>
+      {/* Proficiency bars for all rotations */}
+      {[1,2,3,4].map(r => {
+        const rKey = getJumpKey(jt, r);
+        const rProf = card?.proficiency[rKey] || 0;
+        const isLearned = r <= maxRot;
+        const threshold = JUMP_ROTATION_THRESHOLDS[jt]?.[r-1] || 0;
+        const bodyJump = displayAttributes?.jump || 0;
+        const isLocked = !isLearned && bodyJump < threshold;
+
+        if (isLocked) {
+          return (
+            <div key={r} className="flex items-center gap-3 mb-3 opacity-40">
+              <span className="text-xs font-bold text-slate-600 w-8">{r}{JUMP_SHORT[jt]}</span>
+              <span className="text-xs text-slate-600">&#x1F512; 需要爆发 ≥ {threshold}（当前 {bodyJump.toFixed(0)}）</span>
+            </div>
+          );
+        }
+
+        const bv = ACTION_LIBRARY.find(a => a.techReq?.jumpType === jt && a.techReq?.rotation === r && !a.techReq?.comboSuffix)?.baseScore || 0;
+        const status = rProf >= 80 ? '已掌握' : rProf >= 40 ? '训练中' : isLearned ? '初学' : '';
+
+        return (
+          <div key={r} className="flex items-center gap-3 mb-3">
+            <span className="text-xs font-bold text-slate-300 w-8">{rKey}</span>
+            <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${rProf >= 80 ? 'bg-emerald-500' : rProf >= 60 ? 'bg-blue-500' : rProf >= 40 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${rProf}%` }}></div>
+            </div>
+            <span className={`text-xs font-mono font-bold w-10 text-right ${rProf >= 80 ? 'text-emerald-400' : rProf >= 60 ? 'text-white' : rProf >= 40 ? 'text-amber-400' : 'text-red-400'}`}>{rProf.toFixed(0)}%</span>
+            <span className="text-[10px] text-slate-500 w-14">BV {bv.toFixed(1)}</span>
+            <span className={`text-[10px] font-bold w-12 ${rProf >= 80 ? 'text-emerald-500' : rProf >= 40 ? 'text-blue-400' : 'text-slate-600'}`}>{status}</span>
+          </div>
+        );
+      })}
+
+      {/* Combo pairings */}
+      {technique.comboProficiency && (
+        <div className="mt-4 pt-4 border-t border-slate-800">
+          <p className="text-[10px] font-black text-slate-500 uppercase mb-2">连跳搭配</p>
+          {['+2T', '+3T'].map(suffix => {
+            const comboAction = ACTION_LIBRARY.find(a =>
+              a.techReq?.jumpType === jt && a.techReq?.rotation === maxRot && a.techReq?.comboSuffix === suffix
+            );
+            if (!comboAction) return null;
+            const sr = estimateSuccessRate(comboAction, technique);
+            return (
+              <div key={suffix} className="flex items-center gap-3 mb-1.5">
+                <span className="text-xs text-slate-300 font-bold w-24">{maxRot}{JUMP_SHORT[jt]}{suffix}</span>
+                <span className={`text-xs font-mono font-bold ${sr >= 70 ? 'text-emerald-400' : sr >= 50 ? 'text-amber-400' : 'text-red-400'}`}>成功率 {sr}%</span>
+                <span className="text-[10px] text-slate-500">BV {comboAction.baseScore.toFixed(1)}</span>
+                {sr < 50 && <span className="text-amber-400 text-xs">&#x26A0;&#xFE0F; 高风险</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* GOE */}
+      <div className="mt-3 pt-3 border-t border-slate-800 flex items-center gap-3">
+        <span className="text-[10px] text-slate-500">GOE修正</span>
+        <span className={`text-xs font-black ${(card?.goeBonus || 0) > 0 ? 'text-emerald-400' : (card?.goeBonus || 0) < 0 ? 'text-red-400' : 'text-slate-600'}`}>
+          {(card?.goeBonus || 0) > 0 ? '+' : ''}{(card?.goeBonus || 0).toFixed(2)}
+        </span>
+      </div>
+
+      {/* Variants */}
+      {(card?.variants?.length || 0) > 0 && (
+        <div className="mt-3 pt-3 border-t border-slate-800">
+          <p className="text-[10px] font-black text-amber-500 mb-1">已解锁变体</p>
+          {card!.variants.map(vId => {
+            const v = getVariant(vId);
+            return v ? <div key={vId} className="flex gap-2 mb-0.5"><span className="text-xs text-amber-300 font-bold">{v.name}</span><span className="text-[10px] text-slate-500">BV x{v.bvMultiplier} | 风险+{(v.riskModifier*100).toFixed(0)}%</span></div> : null;
+          })}
+        </div>
+      )}
+
+      {/* Style tags */}
+      {(card?.styleTags?.length || 0) > 0 && (
+        <div className="mt-3 pt-3 border-t border-slate-800">
+          <p className="text-[10px] font-black text-purple-500 mb-1">风格标签</p>
+          {card!.styleTags.map(tId => {
+            const t = getStyleTag(tId);
+            return t ? <div key={tId} className="mb-1"><span className="text-xs text-purple-300 font-bold">{t.name}</span> <span className="text-[10px] text-emerald-500">GOE+{t.goeImpact.toFixed(1)}</span> <span className="text-[9px] text-slate-600 italic">"{t.description}"</span></div> : null;
+          })}
+        </div>
+      )}
+    </>
+  );
+};
+
+/* ── Spin Detail Content ── */
+const SpinDetail: React.FC<{ st: SpinType; technique: NonNullable<GameState['skater']['technique']> }> = ({ st, technique }) => {
+  const card = technique.spins[st];
+  return (
+    <>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-[10px] text-slate-500">等级</span>
+        <span className="text-sm font-black text-indigo-400">Lv{card?.level || 1}</span>
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-[10px] text-slate-500">熟练度</span>
+        <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${card?.proficiency||0}%` }}></div>
+        </div>
+        <span className="text-xs font-mono font-bold text-slate-300">{(card?.proficiency||0).toFixed(0)}%</span>
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-[10px] text-slate-500">GOE修正</span>
+        <span className={`text-xs font-black ${(card?.goeBonus||0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>{(card?.goeBonus||0) > 0 ? '+' : ''}{(card?.goeBonus||0).toFixed(2)}</span>
+      </div>
+      {(card?.variants?.length||0) > 0 && (
+        <div className="pt-3 border-t border-slate-800 mb-3">
+          <p className="text-[10px] font-black text-amber-500 mb-1.5">已解锁变体</p>
+          {card!.variants.map(vId => { const v = getVariant(vId); return v ? <div key={vId} className="flex gap-2 mb-1"><span className="text-xs text-amber-300 font-bold">{v.name}</span><span className="text-[10px] text-slate-500">BV x{v.bvMultiplier}</span></div> : null; })}
+        </div>
+      )}
+      {(card?.styleTags?.length||0) > 0 && (
+        <div className="pt-3 border-t border-slate-800">
+          <p className="text-[10px] font-black text-purple-500 mb-1.5">风格标签</p>
+          {card!.styleTags.map(tId => { const t = getStyleTag(tId); return t ? <div key={tId} className="mb-1"><span className="text-xs text-purple-300 font-bold">{t.name}</span> <span className="text-[10px] text-emerald-500">GOE+{t.goeImpact.toFixed(1)}</span> <span className="text-[9px] text-slate-600 italic">"{t.description}"</span></div> : null; })}
+        </div>
+      )}
+    </>
+  );
+};
+
+/* ── Main TechProfile ── */
 const TechProfile: React.FC<TechProfileProps> = ({ game, displayAttributes, onClose }) => {
   const technique = game.skater.technique;
-  const [expandedJump, setExpandedJump] = useState<JumpType | null>(null);
-  const [expandedSpin, setExpandedSpin] = useState<SpinType | null>(null);
+  const [selectedJump, setSelectedJump] = useState<JumpType | null>(null);
+  const [selectedSpin, setSelectedSpin] = useState<SpinType | null>(null);
 
   if (!technique) return null;
 
@@ -54,116 +210,21 @@ const TechProfile: React.FC<TechProfileProps> = ({ game, displayAttributes, onCl
                 const topKey = getJumpKey(jt, maxRot);
                 const topProf = card?.proficiency[topKey] || 0;
                 const isWarn = topProf > 0 && topProf < 50;
-                const isOpen = expandedJump === jt;
 
                 return (
-                  <div key={jt}>
-                    {/* Overview row */}
-                    <div
-                      onClick={() => setExpandedJump(isOpen ? null : jt)}
-                      className={`flex items-center gap-4 px-4 py-2.5 rounded-xl cursor-pointer transition-all hover:bg-slate-800/60 ${isOpen ? 'bg-slate-800/80 ring-1 ring-blue-500/40' : ''}`}
-                    >
-                      <span className="text-sm font-black text-slate-200 w-20">{JUMP_FULL[jt]}</span>
-                      <RotDots n={maxRot} />
-                      <span className="text-xs text-slate-500 flex-1">{maxRot}{JUMP_SHORT[jt]} 最高</span>
-                      <span className="text-xs text-slate-600 mr-1">熟练度</span>
-                      <span className={`text-sm font-mono font-black w-10 text-right ${topProf >= 80 ? 'text-emerald-400' : topProf >= 60 ? 'text-white' : topProf >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
-                        {topProf.toFixed(0)}%
-                      </span>
-                      {isWarn && <span className="text-amber-400 text-sm">&#x26A0;&#xFE0F;</span>}
-                      <svg className={`w-4 h-4 text-slate-600 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7"/></svg>
-                    </div>
-
-                    {/* Detail layer */}
-                    {isOpen && (
-                      <div className="mx-2 mt-1 mb-3 p-5 bg-slate-950 rounded-2xl border border-slate-800 animate-in slide-in-from-top-2 duration-200">
-                        {/* Proficiency bars for all rotations */}
-                        {[1,2,3,4].map(r => {
-                          const rKey = getJumpKey(jt, r);
-                          const rProf = card?.proficiency[rKey] || 0;
-                          const isLearned = r <= maxRot;
-                          const threshold = JUMP_ROTATION_THRESHOLDS[jt]?.[r-1] || 0;
-                          const bodyJump = displayAttributes?.jump || 0;
-                          const isLocked = !isLearned && bodyJump < threshold;
-
-                          if (isLocked) {
-                            return (
-                              <div key={r} className="flex items-center gap-3 mb-2.5 opacity-40">
-                                <span className="text-xs font-bold text-slate-600 w-8">{r}{JUMP_SHORT[jt]}</span>
-                                <span className="text-xs text-slate-600">&#x1F512; 需要爆发 ≥ {threshold}（当前 {bodyJump.toFixed(0)}）</span>
-                              </div>
-                            );
-                          }
-
-                          const bv = ACTION_LIBRARY.find(a => a.techReq?.jumpType === jt && a.techReq?.rotation === r && !a.techReq?.comboSuffix)?.baseScore || 0;
-                          const status = rProf >= 80 ? '已掌握' : rProf >= 40 ? '训练中' : isLearned ? '初学' : '';
-
-                          return (
-                            <div key={r} className="flex items-center gap-3 mb-2.5">
-                              <span className="text-xs font-bold text-slate-300 w-8">{rKey}</span>
-                              <div className="flex-1 h-3 bg-slate-800 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full transition-all ${rProf >= 80 ? 'bg-emerald-500' : rProf >= 60 ? 'bg-blue-500' : rProf >= 40 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${rProf}%` }}></div>
-                              </div>
-                              <span className={`text-xs font-mono font-bold w-10 text-right ${rProf >= 80 ? 'text-emerald-400' : rProf >= 60 ? 'text-white' : rProf >= 40 ? 'text-amber-400' : 'text-red-400'}`}>{rProf.toFixed(0)}%</span>
-                              <span className="text-[10px] text-slate-500 w-14">BV {bv.toFixed(1)}</span>
-                              <span className={`text-[10px] font-bold w-12 ${rProf >= 80 ? 'text-emerald-500' : rProf >= 40 ? 'text-blue-400' : 'text-slate-600'}`}>{status}</span>
-                            </div>
-                          );
-                        })}
-
-                        {/* Combo pairings */}
-                        {technique.comboProficiency && (
-                          <div className="mt-4 pt-4 border-t border-slate-800">
-                            <p className="text-[10px] font-black text-slate-500 uppercase mb-2">连跳搭配</p>
-                            {['+2T', '+3T'].map(suffix => {
-                              const comboAction = ACTION_LIBRARY.find(a =>
-                                a.techReq?.jumpType === jt && a.techReq?.rotation === maxRot && a.techReq?.comboSuffix === suffix
-                              );
-                              if (!comboAction) return null;
-                              const sr = estimateSuccessRate(comboAction, technique);
-                              return (
-                                <div key={suffix} className="flex items-center gap-3 mb-1.5">
-                                  <span className="text-xs text-slate-300 font-bold w-24">{maxRot}{JUMP_SHORT[jt]}{suffix}</span>
-                                  <span className={`text-xs font-mono font-bold ${sr >= 70 ? 'text-emerald-400' : sr >= 50 ? 'text-amber-400' : 'text-red-400'}`}>成功率 {sr}%</span>
-                                  <span className="text-[10px] text-slate-500">BV {comboAction.baseScore.toFixed(1)}</span>
-                                  {sr < 50 && <span className="text-amber-400 text-xs">&#x26A0;&#xFE0F; 高风险</span>}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {/* GOE */}
-                        <div className="mt-3 pt-3 border-t border-slate-800 flex items-center gap-3">
-                          <span className="text-[10px] text-slate-500">GOE修正</span>
-                          <span className={`text-xs font-black ${(card?.goeBonus || 0) > 0 ? 'text-emerald-400' : (card?.goeBonus || 0) < 0 ? 'text-red-400' : 'text-slate-600'}`}>
-                            {(card?.goeBonus || 0) > 0 ? '+' : ''}{(card?.goeBonus || 0).toFixed(2)}
-                          </span>
-                        </div>
-
-                        {/* Variants */}
-                        {(card?.variants?.length || 0) > 0 && (
-                          <div className="mt-3 pt-3 border-t border-slate-800">
-                            <p className="text-[10px] font-black text-amber-500 mb-1">已解锁变体</p>
-                            {card!.variants.map(vId => {
-                              const v = getVariant(vId);
-                              return v ? <div key={vId} className="flex gap-2 mb-0.5"><span className="text-xs text-amber-300 font-bold">{v.name}</span><span className="text-[10px] text-slate-500">BV x{v.bvMultiplier} | 风险+{(v.riskModifier*100).toFixed(0)}%</span></div> : null;
-                            })}
-                          </div>
-                        )}
-
-                        {/* Style tags */}
-                        {(card?.styleTags?.length || 0) > 0 && (
-                          <div className="mt-3 pt-3 border-t border-slate-800">
-                            <p className="text-[10px] font-black text-purple-500 mb-1">风格标签</p>
-                            {card!.styleTags.map(tId => {
-                              const t = getStyleTag(tId);
-                              return t ? <div key={tId} className="mb-1"><span className="text-xs text-purple-300 font-bold">{t.name}</span> <span className="text-[10px] text-emerald-500">GOE+{t.goeImpact.toFixed(1)}</span> <span className="text-[9px] text-slate-600 italic">"{t.description}"</span></div> : null;
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                  <div
+                    key={jt}
+                    onClick={() => setSelectedJump(jt)}
+                    className="flex items-center gap-4 px-4 py-2.5 rounded-xl cursor-pointer transition-all hover:bg-slate-800/60 hover:ring-1 hover:ring-blue-500/30 active:scale-[0.98]"
+                  >
+                    <span className="text-sm font-black text-slate-200 w-20">{JUMP_FULL[jt]}</span>
+                    <RotDots n={maxRot} />
+                    <span className="text-xs text-slate-500 flex-1">{maxRot}{JUMP_SHORT[jt]} 最高</span>
+                    <span className="text-xs text-slate-600 mr-1">熟练度</span>
+                    <span className={`text-sm font-mono font-black w-10 text-right ${topProf >= 80 ? 'text-emerald-400' : topProf >= 60 ? 'text-white' : topProf >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                      {topProf.toFixed(0)}%
+                    </span>
+                    {isWarn && <span className="text-amber-400 text-sm">&#x26A0;&#xFE0F;</span>}
                   </div>
                 );
               })}
@@ -177,34 +238,17 @@ const TechProfile: React.FC<TechProfileProps> = ({ game, displayAttributes, onCl
               {ALL_SPIN_TYPES.map(st => {
                 const card = technique.spins[st];
                 const variantNames = (card?.variants || []).map(vId => getVariant(vId)?.name).filter(Boolean);
-                const isOpen = expandedSpin === st;
 
                 return (
-                  <div key={st}>
-                    <div
-                      onClick={() => setExpandedSpin(isOpen ? null : st)}
-                      className={`flex items-center gap-4 px-4 py-2 rounded-xl cursor-pointer transition-all hover:bg-slate-800/60 ${isOpen ? 'bg-slate-800/80 ring-1 ring-indigo-500/40' : ''}`}
-                    >
-                      <span className="text-xs font-bold text-slate-200 w-20">{SPIN_NAMES[st]}</span>
-                      <span className="text-xs font-black text-indigo-400 w-10">Lv{card?.level || 1}</span>
-                      <span className="text-xs text-slate-500 flex-1 truncate">{variantNames.length > 0 ? variantNames.join(', ') : '—'}</span>
-                      <span className={`text-xs font-mono font-bold ${(card?.proficiency||0) >= 70 ? 'text-emerald-400' : (card?.proficiency||0) >= 50 ? 'text-white' : 'text-amber-400'}`}>{(card?.proficiency||0).toFixed(0)}%</span>
-                      <svg className={`w-4 h-4 text-slate-600 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7"/></svg>
-                    </div>
-                    {isOpen && (
-                      <div className="mx-2 mt-1 mb-2 p-4 bg-slate-950 rounded-xl border border-slate-800 animate-in slide-in-from-top-2 duration-200">
-                        <div className="flex items-center gap-3 mb-2">
-                          <span className="text-[10px] text-slate-500">熟练度</span>
-                          <div className="flex-1 h-2.5 bg-slate-800 rounded-full overflow-hidden">
-                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${card?.proficiency||0}%` }}></div>
-                          </div>
-                          <span className="text-xs font-mono text-slate-300">{(card?.proficiency||0).toFixed(0)}%</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mb-2">GOE修正 <span className={`font-bold ${(card?.goeBonus||0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>{(card?.goeBonus||0) > 0 ? '+' : ''}{(card?.goeBonus||0).toFixed(2)}</span></div>
-                        {(card?.variants?.length||0) > 0 && <div className="pt-2 border-t border-slate-800">{card!.variants.map(vId => { const v = getVariant(vId); return v ? <span key={vId} className="text-[10px] text-amber-300 mr-3">{v.name} (BV x{v.bvMultiplier})</span> : null; })}</div>}
-                        {(card?.styleTags?.length||0) > 0 && <div className="pt-2 mt-2 border-t border-slate-800">{card!.styleTags.map(tId => { const t = getStyleTag(tId); return t ? <span key={tId} className="text-[10px] text-purple-300 mr-3">{t.name} (GOE+{t.goeImpact})</span> : null; })}</div>}
-                      </div>
-                    )}
+                  <div
+                    key={st}
+                    onClick={() => setSelectedSpin(st)}
+                    className="flex items-center gap-4 px-4 py-2 rounded-xl cursor-pointer transition-all hover:bg-slate-800/60 hover:ring-1 hover:ring-indigo-500/30 active:scale-[0.98]"
+                  >
+                    <span className="text-xs font-bold text-slate-200 w-20">{SPIN_NAMES[st]}</span>
+                    <span className="text-xs font-black text-indigo-400 w-10">Lv{card?.level || 1}</span>
+                    <span className="text-xs text-slate-500 flex-1 truncate">{variantNames.length > 0 ? variantNames.join(', ') : '—'}</span>
+                    <span className={`text-xs font-mono font-bold ${(card?.proficiency||0) >= 70 ? 'text-emerald-400' : (card?.proficiency||0) >= 50 ? 'text-white' : 'text-amber-400'}`}>{(card?.proficiency||0).toFixed(0)}%</span>
                   </div>
                 );
               })}
@@ -269,6 +313,28 @@ const TechProfile: React.FC<TechProfileProps> = ({ game, displayAttributes, onCl
           })()}
         </div>
       </div>
+
+      {/* ── Jump Detail Modal ── */}
+      {selectedJump && (
+        <DetailModal
+          onClose={() => setSelectedJump(null)}
+          title={`${JUMP_FULL[selectedJump]} — ${technique.jumps[selectedJump]?.maxRotation || 1}${JUMP_SHORT[selectedJump]}`}
+          accent="text-blue-400"
+        >
+          <JumpDetail jt={selectedJump} technique={technique} displayAttributes={displayAttributes} />
+        </DetailModal>
+      )}
+
+      {/* ── Spin Detail Modal ── */}
+      {selectedSpin && (
+        <DetailModal
+          onClose={() => setSelectedSpin(null)}
+          title={SPIN_NAMES[selectedSpin]}
+          accent="text-indigo-400"
+        >
+          <SpinDetail st={selectedSpin} technique={technique} />
+        </DetailModal>
+      )}
     </div>
   );
 };
