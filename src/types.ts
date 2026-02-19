@@ -5,6 +5,35 @@ export interface Program {
   freshness: number; // 0 - 100
 }
 
+// --- Technique Card System ---
+export type JumpType = 'axel' | 'toeloop' | 'salchow' | 'loop' | 'flip' | 'lutz';
+
+export interface JumpCard {
+  type: JumpType;
+  maxRotation: number;           // highest learned rotation (1-4)
+  proficiency: Record<string, number>; // e.g. '3Lz': 72 (0-100)
+  goeBonus: number;              // per-type quality modifier (-1.0 to +1.0)
+}
+
+export type SpinType = 'upright' | 'sit' | 'camel' | 'combo' | 'flying';
+
+export interface SpinCard {
+  type: SpinType;
+  level: number;       // 1-4
+  proficiency: number; // 0-100
+}
+
+export interface StepSkill {
+  level: number;       // 1-4
+  proficiency: number; // 0-100
+}
+
+export interface SkaterTechnique {
+  jumps: Record<JumpType, JumpCard>;
+  spins: Record<SpinType, SpinCard>;
+  steps: StepSkill;
+}
+
 export interface HonorRecord {
   year: number;
   month: number;
@@ -28,6 +57,7 @@ export interface Skater {
   art: number; // Calculated from attributes for player, raw for AI
   sta: number; // Global Stamina Resource
   attributes?: PlayerAttributes; // Only for player
+  technique?: SkaterTechnique; // Card-based technique system
   pointsCurrent: number;
   pointsLast: number;
   rolling?: number;
@@ -121,14 +151,23 @@ export interface RandomEvent {
   type: 'positive' | 'negative' | 'neutral';
 }
 
-export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
+export type TrainingTaskType =
+  | 'train_axel' | 'train_toeloop' | 'train_salchow'
+  | 'train_loop' | 'train_flip' | 'train_lutz'
+  | 'spin' | 'step' | 'perf' | 'endurance'
+  | 'rest';
 
 export interface TrainingTaskDefinition {
   id: TrainingTaskType;
   name: string;
   color: string;
+  // Body attribute gain (for body ceiling attributes)
   targetAttr?: keyof PlayerAttributes;
-  baseGain: number;
+  bodyGain: number;
+  // Technique card gain
+  targetTech?: 'jump' | 'spin' | 'step';
+  jumpType?: JumpType;
+  baseGain: number;  // proficiency gain for technique cards
   staCost: number; // positive = cost, negative = gain
   desc: string;
 }
@@ -182,7 +221,14 @@ export interface MatchAction {
   baseScore: number;
   cost: number;
   risk: number; // 0-1 base failure chance
-  reqStats: Partial<PlayerAttributes>; // Requirements to unlock
+  reqStats: Partial<PlayerAttributes>; // Legacy: body ceiling requirements
+  techReq?: {
+    jumpType?: JumpType;
+    rotation?: number;
+    spinType?: SpinType;
+    spinLevel?: number;
+    stepLevel?: number;
+  };
   desc: string;
 }
 

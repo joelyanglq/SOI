@@ -1,6 +1,7 @@
 import React from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
-import { GameState, PlayerAttributes } from '../types';
+import { GameState, PlayerAttributes, JumpType } from '../types';
+import { getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES } from '../game/data/technique';
 
 interface SidebarProps {
   game: GameState;
@@ -8,14 +9,20 @@ interface SidebarProps {
   radarData: { subject: string; A: number; fullMark: number }[];
 }
 
+const JUMP_NAMES: Record<JumpType, string> = {
+  toeloop: 'T', salchow: 'S', loop: 'Lo', flip: 'F', lutz: 'Lz', axel: 'A'
+};
+
 const Sidebar: React.FC<SidebarProps> = ({ game, displayAttributes, radarData }) => {
+  const technique = game.skater.technique;
+
   return (
     <div className="col-span-3 space-y-6">
       <div className="bg-slate-900 border border-slate-800 rounded-[3rem] p-8 shadow-2xl relative overflow-hidden group min-h-[500px] flex flex-col">
         <h2 className="text-3xl font-black text-white italic tracking-tighter mb-2">{game.skater.name}</h2>
         <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-[0.2em]">年龄: {game.skater.age.toFixed(1)} 岁</p>
         <p className="text-[10px] text-slate-500 mb-6 font-bold uppercase tracking-[0.2em]">节目: {game.skater.activeProgram.name}</p>
-        
+
         <div className="flex-1 relative -mx-8 -my-4">
           <ResponsiveContainer width="100%" height={250}>
             <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
@@ -26,6 +33,45 @@ const Sidebar: React.FC<SidebarProps> = ({ game, displayAttributes, radarData })
             </RadarChart>
           </ResponsiveContainer>
         </div>
+
+        {/* Technique Cards Overview */}
+        {technique && (
+          <div className="mb-4">
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">技术卡片</p>
+            <div className="grid grid-cols-6 gap-1 mb-2">
+              {ALL_JUMP_TYPES.map(jt => {
+                const card = technique.jumps[jt];
+                const maxRot = card?.maxRotation || 0;
+                const key = getJumpKey(jt, maxRot);
+                const prof = card?.proficiency[key] || 0;
+                const profColor = prof >= 80 ? 'text-emerald-400' : prof >= 60 ? 'text-white' : prof >= 40 ? 'text-amber-400' : 'text-red-400';
+                return (
+                  <div key={jt} className="bg-slate-950 rounded-lg p-1.5 text-center border border-slate-800">
+                    <div className="text-[8px] font-black text-slate-400">{JUMP_NAMES[jt]}</div>
+                    <div className="text-[10px] font-black text-white">{maxRot}R</div>
+                    <div className={`text-[8px] font-mono font-black ${profColor}`}>{prof.toFixed(0)}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              <div className="bg-slate-950 rounded-lg p-1.5 text-center border border-slate-800">
+                <div className="text-[8px] font-black text-indigo-400">旋转</div>
+                <div className="text-[9px] font-black text-white">
+                  {ALL_SPIN_TYPES.map(st => technique.spins[st]?.level || 1).sort((a,b) => b-a)[0]}Lv
+                </div>
+              </div>
+              <div className="bg-slate-950 rounded-lg p-1.5 text-center border border-slate-800">
+                <div className="text-[8px] font-black text-cyan-400">步法</div>
+                <div className="text-[9px] font-black text-white">{technique.steps?.level || 1}Lv</div>
+              </div>
+              <div className="bg-slate-950 rounded-lg p-1.5 text-center border border-slate-800">
+                <div className="text-[8px] font-black text-slate-400">步法熟练</div>
+                <div className="text-[9px] font-black text-white">{(technique.steps?.proficiency || 0).toFixed(0)}</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-4 relative z-10">
           {displayAttributes && (

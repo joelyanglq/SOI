@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType } from '../types';
-import { MATCH_STRUCTURES, PHASE_META, ACTION_LIBRARY, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk } from '../game/data/actions';
+import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType, SkaterTechnique } from '../types';
+import { MATCH_STRUCTURES, PHASE_META, ACTION_LIBRARY, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk, canPerformAction } from '../game/data/actions';
 import { calculateActionScore } from '../game/scoring';
 import { simulateAIProgram } from '../game/match';
 import { generateLocalCommentary } from '../game/events';
+import { getJumpKey } from '../game/data/technique';
 import { clamp } from '../utils/math';
 
 interface MatchEngineProps {
@@ -34,7 +35,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
   
   useEffect(() => {
     if (programConfig.elements.length === 0 && skater.attributes) {
-      const initialConfig = generateProgramConfig(skater.attributes, phases, 'balanced');
+      const initialConfig = generateProgramConfig(skater.attributes, phases, 'balanced', skater.technique);
       setProgramConfig(initialConfig);
     }
   }, []);
@@ -83,7 +84,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     setIsProcessing(true);
     await new Promise(r => setTimeout(r, 800));
 
-    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true);
+    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true, skater.technique);
 
     const nextSta = clamp(playerMatchSta - result.cost, 0, 100);
     const finalScore = result.score;
@@ -119,7 +120,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
       const action = getActionFromElement(element);
       if (!action) continue;
 
-      const result = calculateActionScore(action, skater.attributes!, sta, true);
+      const result = calculateActionScore(action, skater.attributes!, sta, true, skater.technique);
       const score = result.score;
       sta = clamp(sta - result.cost, 0, 100);
       totalScore += score;
@@ -206,7 +207,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   <button
                     onClick={() => {
                       setConfigStrategy('conservative');
-                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'conservative'));
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'conservative', skater.technique));
                     }}
                     className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'conservative' ? 'bg-emerald-900/30 border-emerald-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
                   >
@@ -219,7 +220,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   <button
                     onClick={() => {
                       setConfigStrategy('balanced');
-                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'balanced'));
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'balanced', skater.technique));
                     }}
                     className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'balanced' ? 'bg-blue-900/30 border-blue-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
                   >
@@ -232,7 +233,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   <button
                     onClick={() => {
                       setConfigStrategy('aggressive');
-                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'aggressive'));
+                      setProgramConfig(generateProgramConfig(skater.attributes!, phases, 'aggressive', skater.technique));
                     }}
                     className={`p-6 rounded-2xl border-2 transition-all ${configStrategy === 'aggressive' ? 'bg-red-900/30 border-red-500' : 'bg-slate-950 border-slate-800 hover:border-slate-600'}`}
                   >
@@ -362,7 +363,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                     const currentAction = getActionFromElement(activeElement);
                     if (!currentAction) return <p className="text-red-400">动作未找到</p>;
                     
-                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true);
+                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true, skater.technique);
                     
                     return (
                       <div className="w-full max-w-xl animate-in zoom-in duration-500">
@@ -494,10 +495,30 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {ACTION_LIBRARY.filter(a => a.type === programConfig.elements[editingElementIndex].phase).map(action => {
-                const isAvailable = Object.entries(action.reqStats).every(
-                  ([key, val]) => (skater.attributes![key as keyof PlayerAttributes] || 0) >= (val as number)
-                );
+                const isAvailable = skater.technique
+                  ? canPerformAction(skater.technique, action)
+                  : Object.entries(action.reqStats).every(
+                      ([key, val]) => (skater.attributes![key as keyof PlayerAttributes] || 0) >= (val as number)
+                    );
                 const isSelected = programConfig.elements[editingElementIndex].actionId === action.id;
+
+                // Get proficiency for display
+                let proficiency: number | null = null;
+                if (skater.technique && action.techReq) {
+                  if (action.techReq.jumpType && action.techReq.rotation) {
+                    const key = getJumpKey(action.techReq.jumpType, action.techReq.rotation);
+                    proficiency = skater.technique.jumps[action.techReq.jumpType]?.proficiency[key] || 0;
+                  } else if (action.techReq.spinType) {
+                    proficiency = skater.technique.spins[action.techReq.spinType]?.proficiency || 0;
+                  } else if (action.techReq.stepLevel) {
+                    proficiency = skater.technique.steps?.proficiency || 0;
+                  }
+                }
+
+                const profColor = proficiency === null ? '' :
+                  proficiency >= 80 ? 'text-emerald-400' :
+                  proficiency >= 60 ? 'text-white' :
+                  proficiency >= 40 ? 'text-amber-400' : 'text-red-400';
                 
                 return (
                   <button
@@ -532,11 +553,12 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                     <div className="flex gap-4 text-xs border-t border-slate-800/50 pt-3">
                       <div><span className="text-slate-600">体力:</span><span className={`font-bold ml-1 ${isAvailable ? 'text-slate-300' : 'text-slate-600'}`}>{action.cost}</span></div>
                       <div><span className="text-slate-600">失误率:</span><span className={`font-bold ml-1 ${!isAvailable ? 'text-slate-600' : action.risk > 0.4 ? 'text-red-400' : action.risk > 0.25 ? 'text-amber-400' : 'text-emerald-400'}`}>{(action.risk * 100).toFixed(0)}%</span></div>
+                      {proficiency !== null && <div><span className="text-slate-600">熟练度:</span><span className={`font-bold ml-1 ${profColor}`}>{proficiency.toFixed(0)}</span></div>}
                     </div>
-                    
+
                     {!isAvailable && (
                       <div className="mt-3 text-xs text-red-400 font-bold">
-                        需求: {Object.entries(action.reqStats).map(([k, v]) => `${k} ≥ ${v}`).join(', ')}
+                        未解锁该技术
                       </div>
                     )}
                   </button>

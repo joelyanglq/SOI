@@ -1,12 +1,13 @@
 import React from 'react';
 import { GameState, TrainingTaskType, Equipment } from '../types';
 import { TRAINING_TASKS } from '../game/data/training';
+import { TrainingResult } from '../game/training';
 
 interface DevelopmentTabProps {
   game: GameState;
   devSubTab: 'train' | 'coach' | 'equip' | 'choreo';
   setDevSubTab: (tab: 'train' | 'coach' | 'equip' | 'choreo') => void;
-  statsPreview: { finalSta: number; gains: Record<string, number> };
+  statsPreview: TrainingResult;
   draggedTask: TrainingTaskType | null;
   setDraggedTask: (task: TrainingTaskType | null) => void;
   setGame: React.Dispatch<React.SetStateAction<GameState>>;
@@ -15,6 +16,11 @@ interface DevelopmentTabProps {
 }
 
 const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDevSubTab, statsPreview, draggedTask, setDraggedTask, setGame, addLog, buyItem }) => {
+  // Group training tasks for display
+  const jumpTasks = Object.values(TRAINING_TASKS).filter(t => t.targetTech === 'jump');
+  const bodyTasks = Object.values(TRAINING_TASKS).filter(t => !t.targetTech || t.targetTech === 'spin' || t.targetTech === 'step');
+  const otherTasks = Object.values(TRAINING_TASKS).filter(t => t.id === 'perf' || t.id === 'endurance' || t.id === 'rest');
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex gap-4 mb-4">
@@ -26,28 +32,43 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
       {devSubTab === 'train' && (
         <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
           <h3 className="text-sm font-black uppercase text-slate-400 mb-6 tracking-widest flex items-center gap-3">月度排程 (7天) <div className="flex-1 h-px bg-slate-800"></div></h3>
-          
-          <div className="mb-8 p-4 bg-slate-950/50 rounded-2xl border border-slate-800 flex justify-between items-center">
-            <div>
-              <p className="text-[10px] font-black text-slate-500 uppercase">预计下月体力</p>
-              <p className={`text-xl font-mono font-black ${statsPreview.finalSta < 20 ? 'text-red-500' : 'text-emerald-400'}`}>{statsPreview.finalSta.toFixed(0)}%</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] font-black text-slate-500 uppercase">重点强化属性</p>
-              <div className="flex gap-2 justify-end">
-                {Object.entries(statsPreview.gains).filter(([k,v]) => (v as number) > 0).slice(0, 3).map(([k,v]) => (
-                  <span key={k} className="text-[10px] font-black bg-slate-800 px-2 py-0.5 rounded text-white uppercase">{k} +{(v as number).toFixed(1)}</span>
-                ))}
-                {Object.keys(statsPreview.gains).every(k => statsPreview.gains[k] <= 0) && <span className="text-[10px] text-slate-600 italic">休整期</span>}
+
+          <div className="mb-8 p-4 bg-slate-950/50 rounded-2xl border border-slate-800">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <p className="text-[10px] font-black text-slate-500 uppercase">预计下月体力</p>
+                <p className={`text-xl font-mono font-black ${statsPreview.finalSta < 20 ? 'text-red-500' : 'text-emerald-400'}`}>{statsPreview.finalSta.toFixed(0)}%</p>
               </div>
+              <div className="text-right">
+                <p className="text-[10px] font-black text-slate-500 uppercase">身体素质提升</p>
+                <div className="flex gap-2 justify-end">
+                  {Object.entries(statsPreview.bodyGains).filter(([,v]) => (v as number) > 0).slice(0, 3).map(([k,v]) => (
+                    <span key={k} className="text-[10px] font-black bg-slate-800 px-2 py-0.5 rounded text-white uppercase">{k} +{(v as number).toFixed(1)}</span>
+                  ))}
+                  {Object.keys(statsPreview.bodyGains).every(k => statsPreview.bodyGains[k] <= 0) && <span className="text-[10px] text-slate-600 italic">休整期</span>}
+                </div>
+              </div>
+            </div>
+            {/* Technique gains preview */}
+            <div className="flex gap-2 flex-wrap">
+              {Object.entries(statsPreview.techGains.jumps).filter(([,v]) => (v as number) > 0).map(([k,v]) => (
+                <span key={k} className="text-[9px] font-black bg-red-900/30 border border-red-800/40 px-2 py-0.5 rounded text-red-300">{k} +{(v as number).toFixed(1)}</span>
+              ))}
+              {Object.entries(statsPreview.techGains.spins).filter(([,v]) => (v as number) > 0).slice(0, 2).map(([k,v]) => (
+                <span key={k} className="text-[9px] font-black bg-indigo-900/30 border border-indigo-800/40 px-2 py-0.5 rounded text-indigo-300">旋转 +{(v as number).toFixed(1)}</span>
+              ))}
+              {statsPreview.techGains.steps > 0 && (
+                <span className="text-[9px] font-black bg-cyan-900/30 border border-cyan-800/40 px-2 py-0.5 rounded text-cyan-300">步法 +{statsPreview.techGains.steps.toFixed(1)}</span>
+              )}
             </div>
           </div>
 
           <div className="grid grid-cols-7 gap-2 mb-8 p-2 bg-slate-950 rounded-2xl border border-slate-800 min-h-[80px]">
             {game.schedule.map((taskId, idx) => {
               const taskDef = TRAINING_TASKS[taskId];
+              if (!taskDef) return <div key={idx} className="rounded-xl bg-slate-800 flex items-center justify-center"><span className="text-[10px] text-slate-500">?</span></div>;
               return (
-                <div 
+                <div
                   key={idx}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -72,23 +93,48 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
             })}
           </div>
 
-          <h4 className="text-[10px] font-black uppercase text-slate-500 mb-4 tracking-widest">训练项目 (拖拽至上方槽位)</h4>
-          <div className="grid grid-cols-3 gap-4">
-            {Object.values(TRAINING_TASKS).map(task => (
-              <div 
+          <h4 className="text-[10px] font-black uppercase text-slate-500 mb-3 tracking-widest">跳跃专项 (拖拽至上方槽位)</h4>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            {jumpTasks.map(task => (
+              <div
                 key={task.id}
                 draggable
                 onDragStart={() => setDraggedTask(task.id)}
                 onDragEnd={() => setDraggedTask(null)}
-                className="bg-slate-950 p-4 rounded-2xl border border-slate-800 cursor-grab active:cursor-grabbing hover:border-slate-600 transition-all group"
+                className="bg-slate-950 p-3 rounded-2xl border border-slate-800 cursor-grab active:cursor-grabbing hover:border-slate-600 transition-all group"
               >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className={`w-3 h-3 rounded-full ${task.color}`}></div>
+                <div className="flex items-center gap-2 mb-1">
+                  <div className={`w-2.5 h-2.5 rounded-full ${task.color}`}></div>
                   <span className="text-xs font-bold text-white">{task.name}</span>
                 </div>
-                <p className="text-[8px] text-slate-500 mb-2 h-6 overflow-hidden leading-tight">{task.desc}</p>
+                <p className="text-[8px] text-slate-500 mb-1 leading-tight">{task.desc}</p>
                 <div className="flex gap-2 text-[8px] font-mono font-black">
-                  {task.targetAttr && <span className="text-blue-400 uppercase">{task.targetAttr}</span>}
+                  <span className="text-blue-400">PROF +{task.baseGain}</span>
+                  <span className="text-slate-600">BODY +{task.bodyGain}</span>
+                  <span className="text-red-500">STA-{Math.abs(task.staCost)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h4 className="text-[10px] font-black uppercase text-slate-500 mb-3 tracking-widest">综合训练与恢复</h4>
+          <div className="grid grid-cols-3 gap-3">
+            {[...bodyTasks.filter(t => t.targetTech === 'spin' || t.targetTech === 'step'), ...otherTasks].map(task => (
+              <div
+                key={task.id}
+                draggable
+                onDragStart={() => setDraggedTask(task.id)}
+                onDragEnd={() => setDraggedTask(null)}
+                className="bg-slate-950 p-3 rounded-2xl border border-slate-800 cursor-grab active:cursor-grabbing hover:border-slate-600 transition-all group"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <div className={`w-2.5 h-2.5 rounded-full ${task.color}`}></div>
+                  <span className="text-xs font-bold text-white">{task.name}</span>
+                </div>
+                <p className="text-[8px] text-slate-500 mb-1 leading-tight">{task.desc}</p>
+                <div className="flex gap-2 text-[8px] font-mono font-black">
+                  {task.targetTech && <span className="text-blue-400">PROF +{task.baseGain}</span>}
+                  {task.targetAttr && <span className="text-slate-400 uppercase">{task.targetAttr} +{task.bodyGain}</span>}
                   <span className={task.staCost > 0 ? 'text-red-500' : 'text-emerald-500'}>STA{task.staCost > 0 ? '-' : '+'}{Math.abs(task.staCost)}</span>
                 </div>
               </div>
@@ -144,7 +190,7 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
         <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
           <h3 className="text-sm font-black uppercase text-slate-400 mb-8 tracking-widest">器材更新</h3>
           <div className="grid grid-cols-2 gap-4">
-            {game.market.equipment.map(item => { 
+            {game.market.equipment.map(item => {
               const alreadyOwned = game.inventory.some(inv => inv.name === item.name);
               return (
                 <div key={item.id} className={`p-6 bg-slate-950 rounded-2xl border border-slate-800 flex flex-col justify-between transition-all ${alreadyOwned ? 'opacity-50' : 'hover:border-emerald-500/30'}`}>
@@ -163,7 +209,7 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
                     {alreadyOwned ? '已在使用' : `¥${item.price.toLocaleString()}`}
                   </button>
                 </div>
-              ); 
+              );
             })}
           </div>
         </div>
