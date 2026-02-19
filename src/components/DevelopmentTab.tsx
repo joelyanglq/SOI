@@ -18,6 +18,7 @@ interface DevelopmentTabProps {
 const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDevSubTab, statsPreview, draggedTask, setDraggedTask, setGame, addLog, buyItem }) => {
   // Group training tasks for display
   const jumpTasks = Object.values(TRAINING_TASKS).filter(t => t.targetTech === 'jump');
+  const comboTasks = Object.values(TRAINING_TASKS).filter(t => t.targetTech === 'combo');
   const bodyTasks = Object.values(TRAINING_TASKS).filter(t => !t.targetTech || t.targetTech === 'spin' || t.targetTech === 'step');
   const otherTasks = Object.values(TRAINING_TASKS).filter(t => t.id === 'perf' || t.id === 'endurance' || t.id === 'rest');
 
@@ -60,6 +61,12 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
               {statsPreview.techGains.steps > 0 && (
                 <span className="text-[9px] font-black bg-cyan-900/30 border border-cyan-800/40 px-2 py-0.5 rounded text-cyan-300">步法 +{statsPreview.techGains.steps.toFixed(1)}</span>
               )}
+              {statsPreview.techGains.combo > 0 && (
+                <span className="text-[9px] font-black bg-rose-900/30 border border-rose-800/40 px-2 py-0.5 rounded text-rose-300">连跳 +{statsPreview.techGains.combo.toFixed(1)}</span>
+              )}
+              {Object.values(statsPreview.goeBonusGains.jumps).some(v => (v as number) > 0) && (
+                <span className="text-[9px] font-black bg-emerald-900/30 border border-emerald-800/40 px-2 py-0.5 rounded text-emerald-300">GOE提升</span>
+              )}
             </div>
           </div>
 
@@ -96,6 +103,30 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
           <h4 className="text-[10px] font-black uppercase text-slate-500 mb-3 tracking-widest">跳跃专项 (拖拽至上方槽位)</h4>
           <div className="grid grid-cols-3 gap-3 mb-6">
             {jumpTasks.map(task => (
+              <div
+                key={task.id}
+                draggable
+                onDragStart={() => setDraggedTask(task.id)}
+                onDragEnd={() => setDraggedTask(null)}
+                className="bg-slate-950 p-3 rounded-2xl border border-slate-800 cursor-grab active:cursor-grabbing hover:border-slate-600 transition-all group"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <div className={`w-2.5 h-2.5 rounded-full ${task.color}`}></div>
+                  <span className="text-xs font-bold text-white">{task.name}</span>
+                </div>
+                <p className="text-[8px] text-slate-500 mb-1 leading-tight">{task.desc}</p>
+                <div className="flex gap-2 text-[8px] font-mono font-black">
+                  <span className="text-blue-400">PROF +{task.baseGain}</span>
+                  <span className="text-slate-600">BODY +{task.bodyGain}</span>
+                  <span className="text-red-500">STA-{Math.abs(task.staCost)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h4 className="text-[10px] font-black uppercase text-slate-500 mb-3 tracking-widest">连跳专项</h4>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            {comboTasks.map(task => (
               <div
                 key={task.id}
                 draggable

@@ -13,6 +13,8 @@ export interface JumpCard {
   maxRotation: number;           // highest learned rotation (1-4)
   proficiency: Record<string, number>; // e.g. '3Lz': 72 (0-100)
   goeBonus: number;              // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[];           // acquired style tag IDs
+  variants: string[];            // unlocked variant IDs (e.g. 'tano', 'rippon')
 }
 
 export type SpinType = 'upright' | 'sit' | 'camel' | 'combo' | 'flying';
@@ -21,17 +23,23 @@ export interface SpinCard {
   type: SpinType;
   level: number;       // 1-4
   proficiency: number; // 0-100
+  goeBonus: number;    // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[]; // acquired style tag IDs
+  variants: string[];  // unlocked variant IDs (e.g. 'biellmann', 'donut')
 }
 
 export interface StepSkill {
   level: number;       // 1-4
   proficiency: number; // 0-100
+  goeBonus: number;    // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[]; // acquired style tag IDs
 }
 
 export interface SkaterTechnique {
   jumps: Record<JumpType, JumpCard>;
   spins: Record<SpinType, SpinCard>;
   steps: StepSkill;
+  comboProficiency: Record<string, number>; // '+2T': 80, '+3T': 45, '+2Lo': 60
 }
 
 export interface HonorRecord {
@@ -154,6 +162,7 @@ export interface RandomEvent {
 export type TrainingTaskType =
   | 'train_axel' | 'train_toeloop' | 'train_salchow'
   | 'train_loop' | 'train_flip' | 'train_lutz'
+  | 'train_combo'
   | 'spin' | 'step' | 'perf' | 'endurance'
   | 'rest';
 
@@ -165,7 +174,7 @@ export interface TrainingTaskDefinition {
   targetAttr?: keyof PlayerAttributes;
   bodyGain: number;
   // Technique card gain
-  targetTech?: 'jump' | 'spin' | 'step';
+  targetTech?: 'jump' | 'spin' | 'step' | 'combo';
   jumpType?: JumpType;
   baseGain: number;  // proficiency gain for technique cards
   staCost: number; // positive = cost, negative = gain
@@ -200,6 +209,7 @@ export interface GameState {
     choreographers: { name: string; cost: number; base: number; desc: string }[];
   };
   lastGrowth?: { tec: number; art: number };
+  pendingStyleTags?: PendingStyleTagSelection[];
 }
 
 export type LogType = 'train' | 'comp' | 'med' | 'sys' | 'shop' | 'event' | 'art';
@@ -228,6 +238,7 @@ export interface MatchAction {
     spinType?: SpinType;
     spinLevel?: number;
     stepLevel?: number;
+    comboSuffix?: string; // '+2T' | '+3T' | '+2Lo' for combo actions
   };
   desc: string;
 }
@@ -243,6 +254,7 @@ export interface MatchStructure {
 export interface ProgramElement {
   phase: MatchPhaseType;
   actionId: string;
+  variant?: string; // active variant ID for this element
 }
 
 export interface ProgramConfig {
@@ -250,3 +262,43 @@ export interface ProgramConfig {
 }
 
 export type ConfigStrategy = 'conservative' | 'balanced' | 'aggressive' | 'custom';
+
+// --- Style Tag System ---
+export interface StyleTagDef {
+  id: string;
+  name: string;
+  nameEn: string;
+  description: string;
+  goeImpact: number;        // 0.1 to 0.5
+  category: 'jump' | 'spin' | 'step' | 'general';
+  rarity: 'common' | 'rare' | 'legendary';
+  requirement?: {
+    minProficiency?: number;
+    minBodyAttr?: Partial<PlayerAttributes>;
+  };
+}
+
+// --- Variant System ---
+export interface VariantDef {
+  id: string;
+  name: string;
+  nameEn: string;
+  description: string;
+  bvMultiplier: number;      // e.g. 1.10 = +10% BV
+  riskModifier: number;      // e.g. 0.05 = +5% added risk
+  category: 'jump' | 'spin';
+  applicableTo?: SpinType[]; // for spin variants only
+  requirement: {
+    minProficiency: number;
+    minBodySpin?: number;
+    prerequisiteVariant?: string;
+  };
+}
+
+// --- Pending Style Tag Selection ---
+export interface PendingStyleTagSelection {
+  targetType: 'jump' | 'spin' | 'step';
+  targetKey: string;
+  proficiencyKey?: string;
+  candidates: string[];
+}

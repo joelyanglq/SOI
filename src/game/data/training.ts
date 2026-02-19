@@ -9,6 +9,9 @@ export const TRAINING_TASKS: Record<string, TrainingTaskDefinition> = {
   train_flip:    { id: 'train_flip',    name: '后内点冰', color: 'bg-pink-600',     targetAttr: 'jump', bodyGain: 0.3, targetTech: 'jump', jumpType: 'flip',    baseGain: 2.0, staCost: 20, desc: "专项后内点冰跳跃" },
   train_lutz:    { id: 'train_lutz',    name: '勾手跳',   color: 'bg-red-800',      targetAttr: 'jump', bodyGain: 0.3, targetTech: 'jump', jumpType: 'lutz',    baseGain: 2.0, staCost: 21, desc: "专项勾手跳跃" },
 
+  // Combo training
+  train_combo: { id: 'train_combo', name: '连跳组合', color: 'bg-rose-500', targetAttr: 'jump', bodyGain: 0.15, targetTech: 'combo', baseGain: 2.5, staCost: 20, desc: "专项连跳后缀训练 (+2T/+3T/+2Lo)" },
+
   // Body training (4 types)
   spin:      { id: 'spin',      name: '柔韧旋转', color: 'bg-indigo-500', targetAttr: 'spin', bodyGain: 0.9, targetTech: 'spin', baseGain: 1.5, staCost: 12, desc: "提升旋转熟练度" },
   step:      { id: 'step',      name: '步法滑行', color: 'bg-cyan-600',   targetAttr: 'step', bodyGain: 0.9, targetTech: 'step', baseGain: 1.5, staCost: 14, desc: "提升步法熟练度" },

@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, useState } from 'react';
 import { useGameState } from './hooks/useGameState';
 import Sidebar from './components/Sidebar';
 import LogPanel from './components/LogPanel';
@@ -8,12 +8,15 @@ import RankingTab from './components/RankingTab';
 import CareerTab from './components/CareerTab';
 import SponsorshipModal from './components/SponsorshipModal';
 import EventNoticeModal from './components/EventNoticeModal';
+import TechProfile from './components/TechProfile';
 import { MATCH_STAMINA_COST } from './game/config';
+import { getStyleTag } from './game/data/styleTags';
 
 const MatchEngine = React.lazy(() => import('./components/MatchEngine'));
 
 const App: React.FC = () => {
   const gs = useGameState();
+  const [showTechProfile, setShowTechProfile] = useState(false);
 
   // --- Naming Screen ---
   if (gs.isNaming) {
@@ -91,7 +94,7 @@ const App: React.FC = () => {
 
       {/* --- Main Layout --- */}
       <main className="container mx-auto grid grid-cols-12 gap-8 p-8">
-        <Sidebar game={gs.game} displayAttributes={gs.displayAttributes} radarData={gs.radarData} />
+        <Sidebar game={gs.game} displayAttributes={gs.displayAttributes} radarData={gs.radarData} onOpenTechProfile={() => setShowTechProfile(true)} />
 
         <div className="col-span-6 space-y-6">
           <div className="bg-slate-900/50 p-2 rounded-2xl border border-slate-800 flex gap-2 shadow-inner">
@@ -162,6 +165,52 @@ const App: React.FC = () => {
           }}
         />
         </Suspense>
+      )}
+
+      {/* --- Tech Profile Modal --- */}
+      {showTechProfile && (
+        <TechProfile game={gs.game} displayAttributes={gs.displayAttributes} onClose={() => setShowTechProfile(false)} />
+      )}
+
+      {/* --- Style Tag Selection Modal --- */}
+      {gs.game.pendingStyleTags && gs.game.pendingStyleTags.length > 0 && (
+        <div className="fixed inset-0 z-[150] bg-slate-950/95 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-300">
+          <div className="max-w-lg w-full bg-slate-900 border border-purple-900/30 rounded-[2.5rem] p-10 shadow-2xl">
+            <div className="w-14 h-14 bg-purple-600/20 text-purple-400 rounded-full flex items-center justify-center text-2xl mb-4 mx-auto">
+              <span>&#x2728;</span>
+            </div>
+            <h2 className="text-2xl font-black text-white text-center mb-2 tracking-tighter">风格标签解锁</h2>
+            <p className="text-sm text-slate-500 text-center mb-2">
+              {gs.game.pendingStyleTags[0].targetType === 'jump' ? '跳跃' : gs.game.pendingStyleTags[0].targetType === 'spin' ? '旋转' : '步法'} - {gs.game.pendingStyleTags[0].targetKey}
+            </p>
+            <p className="text-xs text-slate-600 text-center mb-8">你的技术熟练度达到了新的里程碑！选择一个风格标签来定义你的技术特色。</p>
+            <div className="space-y-3">
+              {gs.game.pendingStyleTags[0].candidates.map(tagId => {
+                const tag = getStyleTag(tagId);
+                if (!tag) return null;
+                return (
+                  <button
+                    key={tagId}
+                    onClick={() => gs.handleSelectStyleTag(0, tagId)}
+                    className="w-full p-5 rounded-2xl border-2 border-slate-800 bg-slate-950 hover:border-purple-500 hover:bg-purple-950/20 transition-all text-left group"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-white text-lg group-hover:text-purple-300 transition-colors">{tag.name}</span>
+                        <span className="text-[9px] text-slate-500 italic">{tag.nameEn}</span>
+                      </div>
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${tag.rarity === 'legendary' ? 'bg-amber-500 text-black' : tag.rarity === 'rare' ? 'bg-purple-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
+                        {tag.rarity === 'legendary' ? '传奇' : tag.rarity === 'rare' ? '稀有' : '普通'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-2">{tag.description}</p>
+                    <p className="text-[10px] text-emerald-400 font-bold">GOE +{tag.goeImpact.toFixed(1)}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

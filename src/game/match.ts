@@ -2,6 +2,7 @@ import { Skater, MatchAction, PlayerAttributes, MatchPhaseType, SkaterTechnique 
 import { ACTION_LIBRARY, MATCH_STRUCTURES, canPerformAction } from './data/actions';
 import { calculateActionScore } from './scoring';
 import { createAITechnique } from './data/technique';
+import { getVariant } from './data/variants';
 
 // Helper to find the best action a skater can perform in a phase
 export const getBestAction = (phase: MatchPhaseType, stats: PlayerAttributes, technique?: SkaterTechnique): MatchAction => {
@@ -26,6 +27,47 @@ export const getBestAction = (phase: MatchPhaseType, stats: PlayerAttributes, te
 // Legacy alias
 export const getBestActionForStats = getBestAction;
 
+// Pick best variant for an action given technique
+const pickAIVariant = (action: MatchAction, technique: SkaterTechnique): string | undefined => {
+  const req = action.techReq;
+  if (!req) return undefined;
+
+  if (req.jumpType && req.rotation) {
+    const card = technique.jumps[req.jumpType];
+    if (card && card.variants.length > 0) {
+      // Pick the variant with highest BV multiplier that the AI has
+      let best: { id: string; mult: number } | undefined;
+      for (const vId of card.variants) {
+        const vDef = getVariant(vId);
+        if (vDef && vDef.category === 'jump') {
+          if (!best || vDef.bvMultiplier > best.mult) {
+            best = { id: vId, mult: vDef.bvMultiplier };
+          }
+        }
+      }
+      return best?.id;
+    }
+  }
+
+  if (req.spinType && req.spinLevel) {
+    const card = technique.spins[req.spinType];
+    if (card && card.variants.length > 0) {
+      let best: { id: string; mult: number } | undefined;
+      for (const vId of card.variants) {
+        const vDef = getVariant(vId);
+        if (vDef && vDef.category === 'spin') {
+          if (!best || vDef.bvMultiplier > best.mult) {
+            best = { id: vId, mult: vDef.bvMultiplier };
+          }
+        }
+      }
+      return best?.id;
+    }
+  }
+
+  return undefined;
+};
+
 // AI Simulation Logic
 export const simulateAIProgram = (skater: Skater, templateId: string): number => {
   const template = MATCH_STRUCTURES[templateId] || MATCH_STRUCTURES['low'];
@@ -46,7 +88,8 @@ export const simulateAIProgram = (skater: Skater, templateId: string): number =>
 
   template.phases.forEach(phase => {
     const bestAction = getBestAction(phase, stats, technique);
-    const res = calculateActionScore(bestAction, stats, currentSta, false, technique);
+    const variant = pickAIVariant(bestAction, technique);
+    const res = calculateActionScore(bestAction, stats, currentSta, false, technique, variant);
     totalScore += res.score;
     currentSta -= res.cost;
   });

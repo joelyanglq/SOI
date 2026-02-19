@@ -10,6 +10,12 @@ export interface TrainingResult {
     jumps: Partial<Record<JumpType, number>>;
     spins: Partial<Record<SpinType, number>>;
     steps: number;
+    combo: number;
+  };
+  goeBonusGains: {
+    jumps: Partial<Record<JumpType, number>>;
+    spins: number;
+    steps: number;
   };
   artPlanPoints: number;
 }
@@ -27,6 +33,12 @@ export const calculateWeeklyStats = (
   const techGains: TrainingResult['techGains'] = {
     jumps: {},
     spins: {},
+    steps: 0,
+    combo: 0,
+  };
+  const goeBonusGains: TrainingResult['goeBonusGains'] = {
+    jumps: {},
+    spins: 0,
     steps: 0,
   };
   let artPlanPoints = 0;
@@ -62,13 +74,22 @@ export const calculateWeeklyStats = (
       if (task.targetTech === 'jump' && task.jumpType) {
         const jt = task.jumpType;
         techGains.jumps[jt] = (techGains.jumps[jt] || 0) + profGain;
+        // goeBonus grows passively during jump training
+        goeBonusGains.jumps[jt] = (goeBonusGains.jumps[jt] || 0) + 0.02 * efficiency;
       } else if (task.targetTech === 'spin') {
         // Spin training improves all spins
         for (const st of ALL_SPIN_TYPES) {
           techGains.spins[st] = (techGains.spins[st] || 0) + profGain;
         }
+        // goeBonus grows passively during spin training
+        goeBonusGains.spins += 0.02 * efficiency;
       } else if (task.targetTech === 'step') {
         techGains.steps += profGain;
+        // goeBonus grows passively during step training
+        goeBonusGains.steps += 0.02 * efficiency;
+      } else if (task.targetTech === 'combo') {
+        // Combo training improves combo suffix proficiency
+        techGains.combo += profGain;
       }
     }
 
@@ -76,5 +97,5 @@ export const calculateWeeklyStats = (
     tempSta = clamp(tempSta - adjustedStaCost, 0, 100);
   }
 
-  return { finalSta: tempSta, bodyGains, techGains, artPlanPoints };
+  return { finalSta: tempSta, bodyGains, techGains, goeBonusGains, artPlanPoints };
 };

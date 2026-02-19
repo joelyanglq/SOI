@@ -12,7 +12,9 @@ import { generateSponsorshipOptions, generateRenewalOptions, generateMarket } fr
 import { generateLocalNarrative } from '../game/events';
 import { simulateAIProgram } from '../game/match';
 import { SURNAME, GIVEN } from '../game/data/equipment';
-import { createInitialTechnique, migrateFromAttributes, autoUnlockTechnique, createAITechnique, getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES } from '../game/data/technique';
+import { createInitialTechnique, migrateFromAttributes, autoUnlockTechnique, autoUnlockVariants, migrateTechniqueFields, createAITechnique, getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES } from '../game/data/technique';
+import { getStyleTagCandidates } from '../game/data/styleTags';
+import { PendingStyleTagSelection } from '../types';
 
 const INITIAL_SKATER: Skater = {
   id: 'player_1', name: "未命名选手", age: 14.1, tec: 40.0, art: 35.0, sta: 100.0,
@@ -57,6 +59,17 @@ export function useGameState() {
       // Migrate technique
       if (!parsed.skater.technique) {
         parsed.skater.technique = migrateFromAttributes(parsed.skater.attributes);
+      } else {
+        parsed.skater.technique = migrateTechniqueFields(parsed.skater.technique);
+      }
+      // Migrate AI techniques
+      if (parsed.aiSkaters) {
+        parsed.aiSkaters = parsed.aiSkaters.map((ai: any) => {
+          if (ai.technique) {
+            ai.technique = migrateTechniqueFields(ai.technique);
+          }
+          return ai;
+        });
       }
       return parsed;
     }
@@ -230,7 +243,7 @@ export function useGameState() {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
 
-      const { finalSta, bodyGains, techGains, artPlanPoints } = calculateWeeklyStats(
+      const { finalSta, bodyGains, techGains, goeBonusGains, artPlanPoints } = calculateWeeklyStats(
         prev.schedule, prev.skater.sta, currentCoach, prev.skater.age,
         prev.skater.attributes!.endurance, prev.skater.technique
       );
@@ -256,8 +269,15 @@ export function useGameState() {
           const key = getJumpKey(jumpType, card.maxRotation);
           const currentProf = card.proficiency[key] || 0;
           card.proficiency[key] = clamp(currentProf + randNormal(gain as number, 0.3), 0, 100);
-          // Also slightly improve goeBonus over time
-          card.goeBonus = clamp(card.goeBonus + 0.01, -1.0, 1.0);
+        }
+      }
+
+      // Apply goeBonus gains from training
+      for (const [jt, gain] of Object.entries(goeBonusGains.jumps)) {
+        const jumpType = jt as JumpType;
+        const card = updatedTechnique.jumps[jumpType];
+        if (card && gain) {
+          card.goeBonus = clamp(card.goeBonus + (gain as number), -1.0, 1.0);
         }
       }
 
@@ -270,6 +290,16 @@ export function useGameState() {
         }
       }
 
+      // Apply spin goeBonus gains
+      if (goeBonusGains.spins > 0) {
+        for (const st of ALL_SPIN_TYPES) {
+          const card = updatedTechnique.spins[st];
+          if (card) {
+            card.goeBonus = clamp(card.goeBonus + goeBonusGains.spins, -1.0, 1.0);
+          }
+        }
+      }
+
       // Step proficiency gains
       if (techGains.steps > 0) {
         updatedTechnique.steps.proficiency = clamp(
@@ -277,8 +307,85 @@ export function useGameState() {
         );
       }
 
+      // Apply step goeBonus gains
+      if (goeBonusGains.steps > 0) {
+        updatedTechnique.steps.goeBonus = clamp(
+          updatedTechnique.steps.goeBonus + goeBonusGains.steps, -1.0, 1.0
+        );
+      }
+
+      // Apply combo proficiency gains
+      if (techGains.combo > 0 && updatedTechnique.comboProficiency) {
+        updatedTechnique.comboProficiency['+2T'] = clamp(
+          (updatedTechnique.comboProficiency['+2T'] || 0) + techGains.combo * 1.0, 0, 100
+        );
+        updatedTechnique.comboProficiency['+3T'] = clamp(
+          (updatedTechnique.comboProficiency['+3T'] || 0) + techGains.combo * 0.7, 0, 100
+        );
+        updatedTechnique.comboProficiency['+2Lo'] = clamp(
+          (updatedTechnique.comboProficiency['+2Lo'] || 0) + techGains.combo * 0.8, 0, 100
+        );
+      }
+
       // Auto-unlock new rotations/levels
       updatedTechnique = autoUnlockTechnique(updatedTechnique, currentBaseAttrs);
+      // Auto-unlock variants based on proficiency
+      updatedTechnique = autoUnlockVariants(updatedTechnique, currentBaseAttrs);
+
+      // Style tag acquisition check: at proficiency 75 (1st tag) and 90 (2nd tag)
+      const pendingTags: PendingStyleTagSelection[] = [];
+
+      for (const jt of ALL_JUMP_TYPES) {
+        const card = updatedTechnique.jumps[jt];
+        const key = getJumpKey(jt, card.maxRotation);
+        const prof = card.proficiency[key] || 0;
+        const tagCount = card.styleTags.length;
+        if ((tagCount === 0 && prof >= 75) || (tagCount === 1 && prof >= 90)) {
+          const candidates = getStyleTagCandidates('jump', prof, currentBaseAttrs, card.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'jump',
+              targetKey: jt,
+              proficiencyKey: key,
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
+
+      for (const st of ALL_SPIN_TYPES) {
+        const card = updatedTechnique.spins[st];
+        const prof = card.proficiency;
+        const tagCount = card.styleTags.length;
+        if ((tagCount === 0 && prof >= 75) || (tagCount === 1 && prof >= 90)) {
+          const candidates = getStyleTagCandidates('spin', prof, currentBaseAttrs, card.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'spin',
+              targetKey: st,
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
+
+      {
+        const stepProf = updatedTechnique.steps.proficiency;
+        const stepTagCount = updatedTechnique.steps.styleTags.length;
+        if ((stepTagCount === 0 && stepProf >= 75) || (stepTagCount === 1 && stepProf >= 90)) {
+          const candidates = getStyleTagCandidates('step', stepProf, currentBaseAttrs, updatedTechnique.steps.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'step',
+              targetKey: 'steps',
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
 
       const updatedInventory = prev.inventory.map(item => ({ ...item, lifespan: item.lifespan - 1 }));
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
@@ -351,15 +458,26 @@ export function useGameState() {
               const key = getJumpKey(jt, card.maxRotation);
               const currentProf = card.proficiency[key] || 0;
               card.proficiency[key] = clamp(currentProf + 0.5, 0, 95);
+              // AI goeBonus growth
+              card.goeBonus = clamp((card.goeBonus || 0) + 0.005, -1.0, 1.0);
             }
           }
           for (const st of ALL_SPIN_TYPES) {
             const card = techCopy.spins[st];
             if (card) {
               card.proficiency = clamp(card.proficiency + 0.3, 0, 95);
+              card.goeBonus = clamp((card.goeBonus || 0) + 0.003, -1.0, 1.0);
             }
           }
           techCopy.steps.proficiency = clamp(techCopy.steps.proficiency + 0.3, 0, 95);
+          techCopy.steps.goeBonus = clamp((techCopy.steps.goeBonus || 0) + 0.003, -1.0, 1.0);
+
+          // AI combo proficiency growth
+          if (techCopy.comboProficiency) {
+            techCopy.comboProficiency['+2T'] = clamp((techCopy.comboProficiency['+2T'] || 0) + 0.3, 0, 95);
+            techCopy.comboProficiency['+3T'] = clamp((techCopy.comboProficiency['+3T'] || 0) + 0.2, 0, 80);
+            techCopy.comboProficiency['+2Lo'] = clamp((techCopy.comboProficiency['+2Lo'] || 0) + 0.2, 0, 70);
+          }
 
           // Auto-unlock for AI
           const aiBodyAttrs = {
@@ -367,7 +485,9 @@ export function useGameState() {
             spin: aiUp.tec,
             step: (aiUp.tec + aiUp.art) / 2
           };
-          aiUp.technique = autoUnlockTechnique(techCopy, aiBodyAttrs);
+          let aiTech = autoUnlockTechnique(techCopy, aiBodyAttrs);
+          aiTech = autoUnlockVariants(aiTech, aiBodyAttrs);
+          aiUp.technique = aiTech;
         }
 
         if (prev.month === 12) {
@@ -462,7 +582,8 @@ export function useGameState() {
         history: updatedHistory, hasCompeted: false,
         activeEvent: triggeredEvent ? { event: triggeredEvent, narrative: generateLocalNarrative(triggeredEvent) } : null,
         market: updatedMarket, inventory: remainingInventory,
-        lastGrowth: { tec: tecGain, art: artGain }
+        lastGrowth: { tec: tecGain, art: artGain },
+        pendingStyleTags: pendingTags.length > 0 ? pendingTags : undefined
       };
     });
     setIsProcessing(false);
@@ -486,6 +607,38 @@ export function useGameState() {
     }, 100);
   };
 
+  const handleSelectStyleTag = useCallback((selectionIndex: number, tagId: string) => {
+    setGame(prev => {
+      if (!prev.pendingStyleTags || selectionIndex >= prev.pendingStyleTags.length) return prev;
+      const selection = prev.pendingStyleTags[selectionIndex];
+      const updatedTechnique = JSON.parse(JSON.stringify(prev.skater.technique));
+
+      if (selection.targetType === 'jump') {
+        const card = updatedTechnique.jumps[selection.targetKey];
+        if (card && !card.styleTags.includes(tagId)) {
+          card.styleTags.push(tagId);
+        }
+      } else if (selection.targetType === 'spin') {
+        const card = updatedTechnique.spins[selection.targetKey];
+        if (card && !card.styleTags.includes(tagId)) {
+          card.styleTags.push(tagId);
+        }
+      } else if (selection.targetType === 'step') {
+        if (!updatedTechnique.steps.styleTags.includes(tagId)) {
+          updatedTechnique.steps.styleTags.push(tagId);
+        }
+      }
+
+      const remainingTags = prev.pendingStyleTags.filter((_, i) => i !== selectionIndex);
+
+      return {
+        ...prev,
+        skater: { ...prev.skater, technique: updatedTechnique },
+        pendingStyleTags: remainingTags.length > 0 ? remainingTags : undefined
+      };
+    });
+  }, []);
+
   return {
     game, setGame,
     isNaming, setIsNaming, newName, setNewName,
@@ -502,6 +655,7 @@ export function useGameState() {
     addLog,
     handleStartGame, confirmResetGame, selectSponsor, handleSponsorshipModalClose,
     buyItem, nextMonth,
+    handleSelectStyleTag,
     MATCH_STAMINA_COST,
   };
 }
