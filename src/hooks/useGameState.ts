@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, PlayerAttributes, Skater, Coach, JumpType, SpinType } from '../types';
+import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, TrainingFocus, PlayerAttributes, Skater, Coach, JumpType, SpinType } from '../types';
 import { clamp, randNormal } from '../utils/math';
 import { STORAGE_KEY, MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR } from '../game/config';
 import { RANDOM_EVENTS } from '../game/data/events';
@@ -25,12 +25,17 @@ const INITIAL_SKATER: Skater = {
   activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
 };
 
-const DEFAULT_SCHEDULE: TrainingTaskType[] = ['rest', 'rest', 'rest', 'rest', 'rest', 'rest', 'rest'];
+const DEFAULT_SCHEDULE: TrainingTaskType[] = ['jump', 'jump', 'spin', 'step', 'perf', 'endurance', 'rest'];
 
-// Migrate old schedule: replace 'jump' with 'train_toeloop'
+const DEFAULT_TRAINING_FOCUS: TrainingFocus = { primaryJump: 'lutz', secondaryJump: 'flip', mode: 'balanced' };
+
+// Migrate old schedule: collapse individual jump types into unified 'jump'
 function migrateSchedule(schedule: any[]): TrainingTaskType[] {
   return schedule.map((t: any) => {
-    if (t === 'jump') return 'train_toeloop';
+    // Old individual jump tasks → unified 'jump'
+    if (t === 'train_axel' || t === 'train_toeloop' || t === 'train_salchow' ||
+        t === 'train_loop' || t === 'train_flip' || t === 'train_lutz' ||
+        t === 'train_combo') return 'jump';
     if (t === 'aura') return 'perf';
     return t as TrainingTaskType;
   });
@@ -56,6 +61,8 @@ export function useGameState() {
       }
       // Migrate schedule
       parsed.schedule = migrateSchedule(parsed.schedule);
+      // Migrate training focus
+      if (!parsed.trainingFocus) parsed.trainingFocus = { ...DEFAULT_TRAINING_FOCUS };
       // Migrate technique
       if (!parsed.skater.technique) {
         parsed.skater.technique = migrateFromAttributes(parsed.skater.attributes);
@@ -78,6 +85,7 @@ export function useGameState() {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
+      trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -145,8 +153,8 @@ export function useGameState() {
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.technique);
-  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes, game.skater.technique]);
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.technique, game.trainingFocus);
+  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes, game.skater.technique, game.trainingFocus]);
 
   const displayAttributes = useMemo(() => {
     if (!game.skater.attributes) return null;
@@ -178,6 +186,7 @@ export function useGameState() {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
+      trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -245,7 +254,7 @@ export function useGameState() {
 
       const { finalSta, bodyGains, techGains, goeBonusGains, artPlanPoints } = calculateWeeklyStats(
         prev.schedule, prev.skater.sta, currentCoach, prev.skater.age,
-        prev.skater.attributes!.endurance, prev.skater.technique
+        prev.skater.attributes!.endurance, prev.skater.technique, prev.trainingFocus
       );
 
       // Apply body attribute gains

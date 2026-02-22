@@ -160,11 +160,15 @@ export interface RandomEvent {
 }
 
 export type TrainingTaskType =
-  | 'train_axel' | 'train_toeloop' | 'train_salchow'
-  | 'train_loop' | 'train_flip' | 'train_lutz'
-  | 'train_combo'
-  | 'spin' | 'step' | 'perf' | 'endurance'
-  | 'rest';
+  | 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
+
+export type TrainingMode = 'stability' | 'balanced' | 'refinement';
+
+export interface TrainingFocus {
+  primaryJump: JumpType;
+  secondaryJump: JumpType;
+  mode: TrainingMode;
+}
 
 export interface TrainingTaskDefinition {
   id: TrainingTaskType;
@@ -174,8 +178,7 @@ export interface TrainingTaskDefinition {
   targetAttr?: keyof PlayerAttributes;
   bodyGain: number;
   // Technique card gain
-  targetTech?: 'jump' | 'spin' | 'step' | 'combo';
-  jumpType?: JumpType;
+  targetTech?: 'jump' | 'spin' | 'step';
   baseGain: number;  // proficiency gain for technique cards
   staCost: number; // positive = cost, negative = gain
   desc: string;
@@ -190,6 +193,7 @@ export interface GameState {
   hasCompeted: boolean;
   skater: Skater;
   schedule: TrainingTaskType[]; // Replaces old plan
+  trainingFocus: TrainingFocus; // Jump focus + training mode
   aiSkaters: Skater[];
   inventory: Equipment[];
   activeCoachId: string | null;

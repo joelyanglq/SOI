@@ -1,7 +1,7 @@
-import { TrainingTaskType, Coach, PlayerAttributes, SkaterTechnique, JumpType, SpinType } from '../types';
+import { TrainingTaskType, Coach, PlayerAttributes, SkaterTechnique, JumpType, SpinType, TrainingFocus } from '../types';
 import { clamp } from '../utils/math';
 import { TRAINING_TASKS } from './data/training';
-import { getJumpKey, ALL_SPIN_TYPES } from './data/technique';
+import { ALL_JUMP_TYPES, ALL_SPIN_TYPES } from './data/technique';
 
 export interface TrainingResult {
   finalSta: number;
@@ -20,13 +20,21 @@ export interface TrainingResult {
   artPlanPoints: number;
 }
 
+// Training mode multipliers for jump training
+const MODE_MODS: Record<string, { prof: number; goe: number }> = {
+  stability:  { prof: 1.2, goe: 0.5 },
+  balanced:   { prof: 1.0, goe: 1.0 },
+  refinement: { prof: 0.6, goe: 2.0 },
+};
+
 export const calculateWeeklyStats = (
   currentSchedule: TrainingTaskType[],
   startSta: number,
   currentCoach: Coach,
   skaterAge: number,
   currentEndurance: number,
-  technique?: SkaterTechnique
+  technique?: SkaterTechnique,
+  trainingFocus?: TrainingFocus
 ): TrainingResult => {
   let tempSta = startSta;
   const bodyGains: Record<string, number> = { jump: 0, spin: 0, step: 0, perf: 0, endurance: 0 };
@@ -47,6 +55,10 @@ export const calculateWeeklyStats = (
   const enduranceCostReduction = currentEndurance / 200;
   const enduranceEfficiencyBonus = currentEndurance / 500;
 
+  // Resolve focus with defaults
+  const focus: TrainingFocus = trainingFocus || { primaryJump: 'lutz', secondaryJump: 'flip', mode: 'balanced' };
+  const modeMod = MODE_MODS[focus.mode] || MODE_MODS.balanced;
+
   for (const taskId of currentSchedule) {
     const task = TRAINING_TASKS[taskId];
     if (!task) continue;
@@ -57,7 +69,7 @@ export const calculateWeeklyStats = (
     else if (tempSta < 20) efficiency = 0.3 + enduranceEfficiencyBonus;
     efficiency = Math.min(efficiency, 1.2);
 
-    // Body attribute gains
+    // Body attribute gains (NOT affected by training mode)
     if (task.targetAttr && task.bodyGain > 0) {
       let coachMod = 1.0;
       if (['jump', 'spin', 'endurance'].includes(task.targetAttr)) coachMod = currentCoach.tecMod;
@@ -69,27 +81,38 @@ export const calculateWeeklyStats = (
 
     // Technique card proficiency gains
     if (task.targetTech && task.baseGain > 0) {
-      const profGain = task.baseGain * currentCoach.tecMod * ageMod * efficiency;
+      const baseProfGain = task.baseGain * currentCoach.tecMod * ageMod * efficiency;
 
-      if (task.targetTech === 'jump' && task.jumpType) {
-        const jt = task.jumpType;
-        techGains.jumps[jt] = (techGains.jumps[jt] || 0) + profGain;
-        // goeBonus grows passively during jump training
-        goeBonusGains.jumps[jt] = (goeBonusGains.jumps[jt] || 0) + 0.02 * efficiency;
-      } else if (task.targetTech === 'spin') {
-        // Spin training improves all spins
-        for (const st of ALL_SPIN_TYPES) {
-          techGains.spins[st] = (techGains.spins[st] || 0) + profGain;
+      if (task.targetTech === 'jump') {
+        // === Jump training: distribute via TrainingFocus ===
+        const profGain = baseProfGain * modeMod.prof;
+        const baseGoeGain = 0.02 * efficiency * modeMod.goe;
+
+        // Primary: 60%, Secondary: 30%, Others: 2.5% each
+        for (const jt of ALL_JUMP_TYPES) {
+          let share: number;
+          if (jt === focus.primaryJump) share = 0.6;
+          else if (jt === focus.secondaryJump) share = 0.3;
+          else share = 0.025;
+          techGains.jumps[jt] = (techGains.jumps[jt] || 0) + profGain * share;
         }
-        // goeBonus grows passively during spin training
+
+        // GOE: primary 70%, secondary 30%
+        goeBonusGains.jumps[focus.primaryJump] = (goeBonusGains.jumps[focus.primaryJump] || 0) + baseGoeGain * 0.7;
+        goeBonusGains.jumps[focus.secondaryJump] = (goeBonusGains.jumps[focus.secondaryJump] || 0) + baseGoeGain * 0.3;
+
+        // Combo: passive gain from jump training (not affected by mode)
+        techGains.combo += baseProfGain * 0.5;
+
+      } else if (task.targetTech === 'spin') {
+        for (const st of ALL_SPIN_TYPES) {
+          techGains.spins[st] = (techGains.spins[st] || 0) + baseProfGain;
+        }
         goeBonusGains.spins += 0.02 * efficiency;
+
       } else if (task.targetTech === 'step') {
-        techGains.steps += profGain;
-        // goeBonus grows passively during step training
+        techGains.steps += baseProfGain;
         goeBonusGains.steps += 0.02 * efficiency;
-      } else if (task.targetTech === 'combo') {
-        // Combo training improves combo suffix proficiency
-        techGains.combo += profGain;
       }
     }
 
