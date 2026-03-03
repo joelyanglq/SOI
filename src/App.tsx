@@ -4,8 +4,9 @@ import Sidebar from './components/Sidebar';
 import LogPanel from './components/LogPanel';
 import EventTab from './components/EventTab';
 import DevelopmentTab from './components/DevelopmentTab';
-import RankingTab from './components/RankingTab';
 import CareerTab from './components/CareerTab';
+import ProgramTab from './components/ProgramTab';
+import ClubTab from './components/ClubTab';
 import SponsorshipModal from './components/SponsorshipModal';
 import EventNoticeModal from './components/EventNoticeModal';
 import TechProfile from './components/TechProfile';
@@ -41,30 +42,40 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 selection:bg-blue-500/30 font-sans">
       {/* --- Nav Bar --- */}
-      <nav className="sticky top-0 z-50 bg-slate-900/90 backdrop-blur-lg border-b border-slate-800 px-8 py-4 flex justify-between items-center shadow-2xl">
-        <div className="flex items-center gap-4">
-          <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 w-12 h-12 rounded-2xl flex items-center justify-center font-black text-2xl italic text-white">F</div>
+      <nav className="sticky top-0 z-50 bg-slate-900/90 backdrop-blur-lg border-b border-slate-800 px-8 py-3 flex items-center gap-6 shadow-2xl">
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 w-10 h-10 rounded-xl flex items-center justify-center font-black text-xl italic text-white">F</div>
           <div>
-            <h1 className="text-xl font-black uppercase tracking-tighter">FS Manager <span className="text-blue-500">Elite</span></h1>
-            <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{gs.game.year} 年 {gs.game.month} 月</p>
+            <h1 className="text-lg font-black uppercase tracking-tighter leading-tight">FS Manager <span className="text-blue-500">Elite</span></h1>
+            <p className="text-[9px] text-slate-500 font-mono uppercase tracking-widest">{gs.game.year} 年 {gs.game.month} 月</p>
           </div>
         </div>
-        <div className="flex items-center gap-10">
+
+        {/* --- Tabs in Nav --- */}
+        <div className="flex-1 flex justify-center">
+          <div className="flex gap-1 bg-slate-950/50 p-1 rounded-xl">
+            {[{ k: 'event', l: '竞技赛事' }, { k: 'development', l: '训练成长' }, { k: 'program', l: '节目工坊' }, { k: 'club', l: '俱乐部管理' }, { k: 'career', l: '选手信息' }].map(t => (
+              <button key={t.k} onClick={() => gs.setActiveTab(t.k as any)} className={`px-5 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${gs.activeTab === t.k ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'}`}>{t.l}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-8 shrink-0">
           <div className="text-right">
-            <p className="text-[10px] text-slate-500 font-bold uppercase">世界排名积分</p>
-            <p className="text-xl font-black text-blue-400 font-mono">{(gs.game.skater.rolling || 0).toLocaleString()}</p>
+            <p className="text-[9px] text-slate-500 font-bold uppercase">排名积分</p>
+            <p className="text-lg font-black text-blue-400 font-mono">{(gs.game.skater.rolling || 0).toLocaleString()}</p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] text-slate-500 font-bold uppercase">持有资金</p>
-            <p className="text-xl font-black text-emerald-400 font-mono">¥{gs.game.money.toLocaleString()}</p>
+            <p className="text-[9px] text-slate-500 font-bold uppercase">资金</p>
+            <p className="text-lg font-black text-emerald-400 font-mono">¥{gs.game.money.toLocaleString()}</p>
           </div>
-          <button 
-            onClick={gs.nextMonth} 
+          <button
+            onClick={gs.nextMonth}
             disabled={gs.isProcessing}
-            className={`bg-blue-600 hover:bg-blue-500 text-white font-black py-4 px-10 rounded-2xl transition-all shadow-xl flex items-center gap-3 active:scale-95 ${gs.game.skater.sta < 10 && gs.statsPreview.finalSta < 10 ? 'bg-red-600 hover:bg-red-500 ring-2 ring-red-500/50' : ''}`}
+            className={`bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-8 rounded-xl transition-all shadow-xl flex items-center gap-2 active:scale-95 text-sm ${gs.game.skater.sta < 10 && gs.statsPreview.finalSta < 10 ? 'bg-red-600 hover:bg-red-500 ring-2 ring-red-500/50' : ''}`}
           >
             {gs.game.skater.sta < 10 && gs.statsPreview.finalSta < 10 ? '体力告急!' : '下个月'}
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
           </button>
         </div>
       </nav>
@@ -94,26 +105,26 @@ const App: React.FC = () => {
       )}
 
       {/* --- Main Layout --- */}
-      <main className="container mx-auto grid grid-cols-12 gap-8 p-8">
-        <Sidebar game={gs.game} displayAttributes={gs.displayAttributes} radarData={gs.radarData} onOpenTechProfile={() => setShowTechProfile(true)} />
-
-        <div className="col-span-6 space-y-6">
-          <div className="bg-slate-900/50 p-2 rounded-2xl border border-slate-800 flex gap-2 shadow-inner">
-            {[{ k: 'event', l: '竞技赛事' }, { k: 'development', l: '能力成长' }, { k: 'ranking', l: '世界排名' }, { k: 'career', l: '选手信息' }].map(t => (
-              <button key={t.k} onClick={() => gs.setActiveTab(t.k as any)} className={`flex-1 py-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${gs.activeTab === t.k ? 'bg-blue-600 text-white shadow-xl scale-105' : 'text-slate-500 hover:bg-slate-800'}`}>{t.l}</button>
-            ))}
+      {gs.activeTab === 'event' ? (
+        <main className="container mx-auto grid grid-cols-12 gap-8 p-8">
+          <Sidebar game={gs.game} displayAttributes={gs.displayAttributes} radarData={gs.radarData} onOpenTechProfile={() => setShowTechProfile(true)} />
+          <div className="col-span-6 space-y-6">
+            <div className="min-h-[600px]">
+              <EventTab game={gs.game} seasonCalendar={gs.seasonCalendar} setShowMatch={gs.setShowMatch} />
+            </div>
           </div>
-          
+          <LogPanel logs={gs.logs} />
+        </main>
+      ) : (
+        <main className="container mx-auto p-8">
           <div className="min-h-[600px]">
-            {gs.activeTab === 'event' && <EventTab game={gs.game} seasonCalendar={gs.seasonCalendar} setShowMatch={gs.setShowMatch} />}
-            {gs.activeTab === 'development' && <DevelopmentTab game={gs.game} devSubTab={gs.devSubTab} setDevSubTab={gs.setDevSubTab} statsPreview={gs.statsPreview} draggedTask={gs.draggedTask} setDraggedTask={gs.setDraggedTask} setGame={gs.setGame} addLog={gs.addLog} buyItem={gs.buyItem} />}
-            {gs.activeTab === 'ranking' && <RankingTab game={gs.game} />}
-            {gs.activeTab === 'career' && <CareerTab game={gs.game} careerSubTab={gs.careerSubTab} setCareerSubTab={gs.setCareerSubTab} sponsorOptions={gs.sponsorOptions} selectSponsor={gs.selectSponsor} setShowResetConfirm={gs.setShowResetConfirm} />}
+            {gs.activeTab === 'development' && <DevelopmentTab game={gs.game} displayAttributes={gs.displayAttributes} statsPreview={gs.statsPreview} draggedTask={gs.draggedTask} setDraggedTask={gs.setDraggedTask} setGame={gs.setGame} />}
+            {gs.activeTab === 'program' && <ProgramTab game={gs.game} setGame={gs.setGame} addLog={gs.addLog} subTab={gs.programSubTab} setSubTab={gs.setProgramSubTab} />}
+            {gs.activeTab === 'club' && <ClubTab game={gs.game} setGame={gs.setGame} clubSubTab={gs.clubSubTab} setClubSubTab={gs.setClubSubTab} sponsorOptions={gs.sponsorOptions} selectSponsor={gs.selectSponsor} buyItem={gs.buyItem} />}
+            {gs.activeTab === 'career' && <CareerTab game={gs.game} careerSubTab={gs.careerSubTab} setCareerSubTab={gs.setCareerSubTab} setShowResetConfirm={gs.setShowResetConfirm} />}
           </div>
-        </div>
-        
-        <LogPanel logs={gs.logs} />
-      </main>
+        </main>
+      )}
 
       {/* --- Modals --- */}
       {gs.game.activeEvent && <EventNoticeModal game={gs.game} setGame={gs.setGame} />}

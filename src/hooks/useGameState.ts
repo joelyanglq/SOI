@@ -149,9 +149,10 @@ export function useGameState() {
   const [sponsorshipModalMode, setSponsorshipModalMode] = useState<'selection' | 'expired'>('selection');
   const [sponsorshipRenewalOptions, setSponsorshipRenewalOptions] = useState<Sponsorship[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [activeTab, setActiveTab] = useState<'event' | 'development' | 'ranking' | 'career'>('event');
-  const [devSubTab, setDevSubTab] = useState<'train' | 'coach' | 'equip' | 'choreo'>('train');
-  const [careerSubTab, setCareerSubTab] = useState<'profile' | 'honors' | 'stats'>('profile');
+  const [activeTab, setActiveTab] = useState<'event' | 'development' | 'program' | 'club' | 'career'>('event');
+  const [programSubTab, setProgramSubTab] = useState<'detail' | 'create' | 'costume'>('detail');
+  const [clubSubTab, setClubSubTab] = useState<'coach' | 'equip' | 'sponsor'>('coach');
+  const [careerSubTab, setCareerSubTab] = useState<'profile' | 'honors' | 'stats' | 'ranking'>('profile');
   const [draggedTask, setDraggedTask] = useState<TrainingTaskType | null>(null);
   const [showMatch, setShowMatch] = useState<{ event: GameEvent, idx: number } | null>(null);
   const previousSponsorRef = useRef<Sponsorship | null>(null);
@@ -758,7 +759,8 @@ export function useGameState() {
     sponsorOptions, showSponsorshipModal, sponsorshipModalMode, sponsorshipRenewalOptions,
     logs,
     activeTab, setActiveTab,
-    devSubTab, setDevSubTab,
+    programSubTab, setProgramSubTab,
+    clubSubTab, setClubSubTab,
     careerSubTab, setCareerSubTab,
     draggedTask, setDraggedTask,
     showMatch, setShowMatch,

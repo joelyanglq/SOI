@@ -1,21 +1,19 @@
 import React from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { GameState, Sponsorship } from '../types';
+import { GameState, Skater } from '../types';
 
 interface CareerTabProps {
   game: GameState;
-  careerSubTab: 'profile' | 'honors' | 'stats';
-  setCareerSubTab: (tab: 'profile' | 'honors' | 'stats') => void;
-  sponsorOptions: Sponsorship[];
-  selectSponsor: (sp: Sponsorship) => void;
+  careerSubTab: 'profile' | 'honors' | 'stats' | 'ranking';
+  setCareerSubTab: (tab: 'profile' | 'honors' | 'stats' | 'ranking') => void;
   setShowResetConfirm: (show: boolean) => void;
 }
 
-const CareerTab: React.FC<CareerTabProps> = ({ game, careerSubTab, setCareerSubTab, sponsorOptions, selectSponsor, setShowResetConfirm }) => {
+const CareerTab: React.FC<CareerTabProps> = ({ game, careerSubTab, setCareerSubTab, setShowResetConfirm }) => {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="flex gap-4 mb-4">
-        {[{ k: 'profile', l: '档案' }, { k: 'honors', l: '荣誉' }, { k: 'stats', l: '趋势' }].map(s => (
+        {[{ k: 'profile', l: '档案' }, { k: 'honors', l: '荣誉' }, { k: 'stats', l: '趋势' }, { k: 'ranking', l: '世界排名' }].map(s => (
           <button key={s.k} onClick={() => setCareerSubTab(s.k as any)} className={`px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${careerSubTab === s.k ? 'bg-white text-slate-950 shadow-lg' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}>{s.l}</button>
         ))}
       </div>
@@ -101,40 +99,6 @@ const CareerTab: React.FC<CareerTabProps> = ({ game, careerSubTab, setCareerSubT
       {careerSubTab === 'profile' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl">
-            <h3 className="text-xs font-black uppercase text-slate-500 mb-6 tracking-widest">商业代言</h3>
-            {game.activeSponsor ? (
-              <div className="bg-slate-950 p-6 rounded-2xl border border-blue-500/30">
-                <p className="text-lg font-black text-white italic mb-2 tracking-tight">{game.activeSponsor.name}</p>
-                <div className="space-y-2">
-                  {game.activeSponsor.paymentType === 'monthly' ? (
-                    <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>月度收益</span><span className="text-emerald-400">¥{(game.activeSponsor.monthlyPay || 0).toLocaleString()}</span></div>
-                  ) : (
-                    <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>总包收入</span><span className="text-emerald-400">¥{(game.activeSponsor.totalPay || 0).toLocaleString()}</span></div>
-                  )}
-                  <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-500"><span>剩余合约</span><span className="text-blue-400">{game.activeSponsor.remainingMonths} 个月</span></div>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-[10px] text-amber-500 font-black uppercase mb-4 text-center">当前可签协议 ({sponsorOptions.length})</p>
-                <div className="space-y-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
-                  {sponsorOptions.map(sp => {
-                    const disabled = game.fame < sp.minFame;
-                    return (
-                      <button key={sp.id} disabled={disabled} onClick={() => selectSponsor(sp)} className={`w-full p-4 rounded-xl border text-left transition-all ${disabled ? 'bg-slate-950 border-slate-800 opacity-30 cursor-not-allowed' : 'bg-slate-950 border-slate-800 hover:border-blue-500'}`}>
-                        <div className="flex justify-between mb-1"><span className="text-xs font-black text-white">{sp.name}</span><span className="text-[8px] uppercase text-blue-400">{sp.tier}</span></div>
-                        <div className="flex justify-between text-[8px] text-slate-500 font-bold"><span>{sp.paymentType === 'monthly' ? `月薪: ¥${(sp.monthlyPay||0)}` : `总包: ¥${(sp.totalPay||0)}`}</span><span>签约金: ¥{sp.signingBonus}</span></div>
-                        {disabled && <p className="text-[8px] text-red-500 mt-1 uppercase">需名望: {sp.minFame}</p>}
-                      </button>
-                    );
-                  })}
-                  {sponsorOptions.length === 0 && <p className="text-xs text-slate-600 text-center py-10 italic">暂无赞助商意向</p>}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] shadow-2xl">
             <h3 className="text-xs font-black uppercase text-slate-500 mb-6 tracking-widest">当前装备库</h3>
             <div className="space-y-3 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
               {game.inventory.length > 0 ? game.inventory.map(item => (
@@ -146,7 +110,7 @@ const CareerTab: React.FC<CareerTabProps> = ({ game, careerSubTab, setCareerSubT
             </div>
           </div>
 
-          <div className="md:col-span-2 bg-slate-900/50 border border-slate-800 p-10 rounded-[2.5rem] flex flex-col items-center justify-center space-y-6">
+          <div className="bg-slate-900/50 border border-slate-800 p-10 rounded-[2.5rem] flex flex-col items-center justify-center space-y-6">
             <div className="text-center">
               <h3 className="text-xs font-black text-red-500 uppercase tracking-[0.3em] mb-2">危险操作区域</h3>
               <p className="text-[10px] text-slate-500 max-w-sm">重置后将清除所有选手的成长轨迹、奖牌历史、资产和器材。本操作在沙盒预览环境中即时生效。</p>
@@ -155,6 +119,32 @@ const CareerTab: React.FC<CareerTabProps> = ({ game, careerSubTab, setCareerSubT
               <span className="relative z-10 group-hover:text-white transition-colors">确认重置我的职业生涯</span>
               <div className="absolute inset-0 bg-red-600 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
             </button>
+          </div>
+        </div>
+      )}
+
+      {careerSubTab === 'ranking' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-[3rem] overflow-hidden shadow-2xl">
+          <div className="p-8 bg-slate-800/40 border-b border-slate-800 flex justify-between items-center">
+            <h3 className="text-sm font-black uppercase text-white tracking-widest">ISU 世界排名公告板</h3>
+            <span className="text-[10px] text-slate-500 font-mono">{game.aiSkaters.length + 1} 名注册选手</span>
+          </div>
+          <div className="h-[550px] overflow-y-auto divide-y divide-slate-800/50 px-4 custom-scrollbar">
+            {[...game.aiSkaters, game.skater].sort((a,b) => (b.rolling || 0) - (a.rolling || 0)).map((s, idx) => (
+              <div key={s.id || idx} className={`flex justify-between items-center p-5 rounded-2xl ${s.isPlayer ? 'bg-blue-600/10 border border-blue-500/20 my-2 shadow-lg' : 'hover:bg-slate-800/30 transition-all'}`}>
+                <div className="flex items-center gap-5">
+                  <span className={`font-black text-sm w-8 ${idx === 0 ? 'text-amber-500' : idx === 1 ? 'text-slate-300' : idx === 2 ? 'text-amber-700' : 'text-slate-600'}`}>{idx + 1}.</span>
+                  <div>
+                    <span className={`font-bold ${s.isPlayer ? 'text-blue-400 font-black' : 'text-slate-300'}`}>{s.name} {s.injuryMonths > 0 && <span className="text-[10px] text-red-500 font-black ml-2">INJURED</span>}</span>
+                    <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">年龄: {s.age.toFixed(1)} | 总分: {s.pointsCurrent + s.pointsLast}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="font-mono text-white text-base font-black italic">{(s.rolling || 0).toLocaleString()}</span>
+                  <p className="text-[9px] text-slate-600 font-bold uppercase">Points</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
