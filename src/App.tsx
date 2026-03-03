@@ -11,6 +11,7 @@ import EventNoticeModal from './components/EventNoticeModal';
 import TechProfile from './components/TechProfile';
 import { MATCH_STAMINA_COST } from './game/config';
 import { getStyleTag } from './game/data/styleTags';
+import { getTrait, TRAIT_LIBRARY } from './game/data/traits';
 
 const MatchEngine = React.lazy(() => import('./components/MatchEngine'));
 
@@ -132,13 +133,13 @@ const App: React.FC = () => {
             const rank = results.findIndex((r: any) => r.isPlayer) + 1;
             const pts = Math.floor(gs.showMatch!.event.pts / (rank * 0.4 + 0.6));
             const fameGained = Math.max(0, 10 - rank) * 10 + (rank === 1 ? 150 : 0);
-            
-            const isMajor = gs.showMatch!.event.pts >= 2500 || 
-                           gs.showMatch!.event.name.includes("世锦赛") || 
-                           gs.showMatch!.event.name.includes("奥运会") || 
+
+            const isMajor = gs.showMatch!.event.pts >= 2500 ||
+                           gs.showMatch!.event.name.includes("世锦赛") ||
+                           gs.showMatch!.event.name.includes("奥运会") ||
                            gs.showMatch!.event.name.includes("总决赛");
-            
-            const enduranceFactor = gs.game.skater.attributes ? (gs.game.skater.attributes.endurance / 200) : 0; 
+
+            const enduranceFactor = gs.game.skater.attributes ? (gs.game.skater.attributes.endurance / 200) : 0;
             const finalStaCost = Math.max(5, MATCH_STAMINA_COST * (1 - enduranceFactor));
 
             gs.setGame(prev => {
@@ -148,16 +149,33 @@ const App: React.FC = () => {
                 honors.push({ year: prev.year, month: prev.month, eventName: gs.showMatch!.event.name, rank, points: pts });
               }
 
-              return { 
+              // Check trait milestone: first podium (rank <= 3) and traits < 4
+              let pendingTraitSelection = prev.pendingTraitSelection;
+              const currentTraits = prev.skater.traits || [];
+              if (rank <= 3 && currentTraits.length < 4 && !pendingTraitSelection) {
+                const available = TRAIT_LIBRARY
+                  .filter(t => !currentTraits.includes(t.id))
+                  .map(t => t.id);
+                if (available.length >= 3) {
+                  const shuffled = [...available].sort(() => Math.random() - 0.5);
+                  pendingTraitSelection = {
+                    reason: rank === 1 ? `${gs.showMatch!.event.name} 冠军` : `${gs.showMatch!.event.name} 第${rank}名`,
+                    candidates: shuffled.slice(0, 3),
+                  };
+                }
+              }
+
+              return {
                 ...prev, hasCompeted: true,
-                skater: { 
-                  ...prev.skater, 
+                skater: {
+                  ...prev.skater,
                   pointsCurrent: prev.skater.pointsCurrent + pts,
                   sta: Math.max(0, prev.skater.sta - finalStaCost),
                   honors
-                }, 
+                },
                 money: prev.money + (gs.showMatch!.event.prize || 0) * (rank <= 3 ? (4-rank)*0.3 + 0.1 : 0),
-                fame: prev.fame + fameGained
+                fame: prev.fame + fameGained,
+                pendingTraitSelection,
               };
             });
             gs.addLog(`${gs.showMatch!.event.name}: 第${rank}名 | +${pts}分`, 'comp');
@@ -205,6 +223,45 @@ const App: React.FC = () => {
                     </div>
                     <p className="text-xs text-slate-400 mb-2">{tag.description}</p>
                     <p className="text-[10px] text-emerald-400 font-bold">GOE +{tag.goeImpact.toFixed(1)}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Trait Selection Modal --- */}
+      {gs.game.pendingTraitSelection && (
+        <div className="fixed inset-0 z-[160] bg-slate-950/95 backdrop-blur-sm flex items-center justify-center p-8 animate-in fade-in duration-300">
+          <div className="max-w-lg w-full bg-slate-900 border border-amber-900/30 rounded-[2.5rem] p-10 shadow-2xl">
+            <div className="w-14 h-14 bg-amber-600/20 text-amber-400 rounded-full flex items-center justify-center text-2xl mb-4 mx-auto">
+              <span>&#x1F3C6;</span>
+            </div>
+            <h2 className="text-2xl font-black text-white text-center mb-2 tracking-tighter">新特质解锁</h2>
+            <p className="text-sm text-amber-400 text-center mb-1 font-bold">{gs.game.pendingTraitSelection.reason}</p>
+            <p className="text-xs text-slate-600 text-center mb-8">选择一个特质来定义你的选手个性。特质将永久影响训练和比赛。</p>
+            <div className="space-y-3">
+              {gs.game.pendingTraitSelection.candidates.map(traitId => {
+                const trait = getTrait(traitId);
+                if (!trait) return null;
+                return (
+                  <button
+                    key={traitId}
+                    onClick={() => gs.handleSelectTrait(traitId)}
+                    className={`w-full p-5 rounded-2xl border-2 bg-slate-950 transition-all text-left group ${trait.isNegative ? 'border-red-900/40 hover:border-red-500' : 'border-slate-800 hover:border-amber-500 hover:bg-amber-950/20'}`}
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="text-2xl">{trait.icon}</span>
+                      <div>
+                        <span className="font-black text-white text-lg group-hover:text-amber-300 transition-colors">{trait.name}</span>
+                        <span className="text-[9px] text-slate-500 italic ml-2">{trait.nameEn}</span>
+                      </div>
+                      <span className={`ml-auto text-[8px] font-black uppercase px-2 py-0.5 rounded ${trait.trigger === 'passive' ? 'bg-blue-800 text-blue-200' : 'bg-purple-800 text-purple-200'}`}>
+                        {trait.trigger === 'passive' ? '被动' : '条件'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 pl-10">{trait.description}</p>
                   </button>
                 );
               })}

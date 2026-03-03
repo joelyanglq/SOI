@@ -2,6 +2,7 @@ import React from 'react';
 import { GameState, TrainingTaskType, Equipment, JumpType, TrainingMode } from '../types';
 import { TRAINING_TASKS } from '../game/data/training';
 import { TrainingResult } from '../game/training';
+import ProgramCreator from './ProgramCreator';
 
 interface DevelopmentTabProps {
   game: GameState;
@@ -257,23 +258,7 @@ const DevelopmentTab: React.FC<DevelopmentTabProps> = ({ game, devSubTab, setDev
       {devSubTab === 'choreo' && (
         <div className="bg-slate-900 border border-slate-800 p-10 rounded-[3rem] shadow-2xl">
           <h3 className="text-sm font-black uppercase text-slate-400 mb-8 tracking-widest">节目编排</h3>
-          <div className="space-y-4">
-            {game.market.choreographers.map((ch, idx) => (
-              <div key={idx} className="p-6 bg-slate-950 border border-slate-800 rounded-2xl flex justify-between items-center transition-all">
-                <div>
-                  <p className="font-black text-white text-lg mb-1 italic">《{ch.name}》</p>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase">{ch.desc}</p>
-                  <p className="text-[8px] text-purple-400 font-black uppercase mt-1">艺术底蕴: {ch.base}</p>
-                </div>
-                <button onClick={() => {
-                  if (game.money >= ch.cost) {
-                    setGame(p => ({ ...p, money: p.money - ch.cost, skater: { ...p.skater, activeProgram: { name: ch.name, baseArt: ch.base, freshness: 100 } } }));
-                    addLog(`完成编舞: 《${ch.name}》`, 'art');
-                  } else alert("资金不足");
-                }} className="bg-purple-600 hover:bg-purple-500 text-white px-8 py-4 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95">¥{ch.cost.toLocaleString()}</button>
-              </div>
-            ))}
-          </div>
+          <ProgramCreator game={game} setGame={setGame} addLog={addLog} />
         </div>
       )}
 

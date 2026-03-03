@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, TrainingFocus, PlayerAttributes, Skater, Coach, JumpType, SpinType } from '../types';
+import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, TrainingFocus, PlayerAttributes, Skater, Coach, JumpType, SpinType, TraitId } from '../types';
 import { clamp, randNormal } from '../utils/math';
 import { STORAGE_KEY, MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR } from '../game/config';
 import { RANDOM_EVENTS } from '../game/data/events';
@@ -15,6 +15,11 @@ import { SURNAME, GIVEN } from '../game/data/equipment';
 import { createInitialTechnique, migrateFromAttributes, autoUnlockTechnique, autoUnlockVariants, migrateTechniqueFields, createAITechnique, getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES } from '../game/data/technique';
 import { getStyleTagCandidates } from '../game/data/styleTags';
 import { PendingStyleTagSelection } from '../types';
+import { rollInnateTraits, rollAITraits, applyQuickLearnerBonus, hasTrait } from '../game/data/traits';
+import { createDefaultProgramV2 } from '../game/program';
+import { generateMusic } from '../game/data/music';
+import { pickMarketChoreographers } from '../game/data/choreographers';
+import { generateCostumeMarket } from '../game/data/costumes';
 
 const INITIAL_SKATER: Skater = {
   id: 'player_1', name: "未命名选手", age: 14.1, tec: 40.0, art: 35.0, sta: 100.0,
@@ -78,19 +83,59 @@ export function useGameState() {
           return ai;
         });
       }
+      // Migrate traits
+      if (!parsed.skater.traits) {
+        parsed.skater.traits = rollInnateTraits(1);
+      }
+      if (parsed.aiSkaters) {
+        parsed.aiSkaters = parsed.aiSkaters.map((ai: any) => {
+          if (!ai.traits) {
+            const tier = (ai.tec || 0) >= 75 ? 'elite' as const : (ai.tec || 0) >= 55 ? 'pro' as const : 'rookie' as const;
+            ai.traits = rollAITraits(tier);
+          }
+          return ai;
+        });
+      }
+      // Migrate programV2
+      if (!parsed.skater.programV2) {
+        parsed.skater.programV2 = createDefaultProgramV2(parsed.skater.activeProgram);
+      }
+      // Migrate playerMusic
+      if (!parsed.playerMusic) {
+        parsed.playerMusic = [generateMusic()];
+      }
+      // Migrate choreographers from old format (plain objects → NPC refs)
+      if (parsed.market?.choreographers && parsed.market.choreographers.length > 0 && !parsed.market.choreographers[0]?.id) {
+        parsed.market.choreographers = pickMarketChoreographers(4);
+      }
+      // Migrate costumes market
+      if (!parsed.market?.costumes) {
+        parsed.market.costumes = generateCostumeMarket(3);
+      }
+      // Migrate AI programV2
+      if (parsed.aiSkaters) {
+        parsed.aiSkaters = parsed.aiSkaters.map((ai: any) => {
+          if (!ai.programV2) {
+            ai.programV2 = createDefaultProgramV2(ai.activeProgram);
+          }
+          return ai;
+        });
+      }
       return parsed;
     }
     const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
+    const initialProgramV2 = createDefaultProgramV2(INITIAL_SKATER.activeProgram);
     return {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
-      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
+      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER), programV2: initialProgramV2 },
       schedule: [...DEFAULT_SCHEDULE],
       trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
       market: generateMarket(),
-      lastGrowth: { tec: 0, art: 0 }
+      lastGrowth: { tec: 0, art: 0 },
+      playerMusic: [generateMusic()],
     };
   });
 
@@ -153,7 +198,7 @@ export function useGameState() {
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.technique, game.trainingFocus);
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.technique, game.trainingFocus, game.skater.traits);
   }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes, game.skater.technique, game.trainingFocus]);
 
   const displayAttributes = useMemo(() => {
@@ -182,16 +227,18 @@ export function useGameState() {
   const confirmResetGame = () => {
     localStorage.removeItem(STORAGE_KEY);
     const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
+    const resetProgramV2 = createDefaultProgramV2(INITIAL_SKATER.activeProgram);
     const resetState: GameState = {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
-      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
+      skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER), programV2: resetProgramV2 },
       schedule: [...DEFAULT_SCHEDULE],
       trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
       market: generateMarket(),
-      lastGrowth: { tec: 0, art: 0 }
+      lastGrowth: { tec: 0, art: 0 },
+      playerMusic: [generateMusic()],
     };
     setGame(resetState);
     setIsNaming(true);
@@ -252,9 +299,10 @@ export function useGameState() {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
 
-      const { finalSta, bodyGains, techGains, goeBonusGains, artPlanPoints } = calculateWeeklyStats(
+      const { finalSta, bodyGains, techGains, goeBonusGains, artPlanPoints, maturityGain } = calculateWeeklyStats(
         prev.schedule, prev.skater.sta, currentCoach, prev.skater.age,
-        prev.skater.attributes!.endurance, prev.skater.technique, prev.trainingFocus
+        prev.skater.attributes!.endurance, prev.skater.technique, prev.trainingFocus,
+        prev.skater.traits
       );
 
       // Apply body attribute gains
@@ -277,7 +325,11 @@ export function useGameState() {
         if (card && gain) {
           const key = getJumpKey(jumpType, card.maxRotation);
           const currentProf = card.proficiency[key] || 0;
-          card.proficiency[key] = clamp(currentProf + randNormal(gain as number, 0.3), 0, 100);
+          const rawGain = randNormal(gain as number, 0.3);
+          const adjustedGain = applyQuickLearnerBonus(currentProf, rawGain, prev.skater.traits);
+          // glass_cannon: quad jump proficiency cap raised to 115
+          const profCap = (card.maxRotation >= 4 && hasTrait(prev.skater.traits, 'glass_cannon')) ? 115 : 100;
+          card.proficiency[key] = clamp(currentProf + adjustedGain, 0, profCap);
         }
       }
 
@@ -408,8 +460,25 @@ export function useGameState() {
         activeProgram: {
           ...prev.skater.activeProgram,
           freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100)
-        }
+        },
+        // Update programV2 maturity
+        programV2: prev.skater.programV2 ? {
+          ...prev.skater.programV2,
+          maturity: clamp(
+            prev.skater.programV2.maturity + maturityGain
+              - (prev.skater.programV2.totalRuns > 8 ? (prev.skater.programV2.totalRuns - 8) * 2 : 0),
+            0, 100
+          ),
+        } : prev.skater.programV2,
       };
+
+      // Music discovery: 25% chance per month
+      let updatedPlayerMusic = prev.playerMusic || [];
+      if (Math.random() < 0.25) {
+        const newMusic = generateMusic();
+        updatedPlayerMusic = [...updatedPlayerMusic, newMusic].slice(-20);
+        setTimeout(() => addLog(`发现新曲目: 《${newMusic.name}》`, 'art'), 200);
+      }
 
       let sponsorIncome = 0;
       if (prev.activeSponsor) {
@@ -435,6 +504,15 @@ export function useGameState() {
         if (e.perf) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.perf, 0, 100);
         if (e.endurance) updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.endurance, 0, 100);
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
+        // Injury with trait modifiers
+        if (e.injuryMonths && e.injuryMonths > 0) {
+          let injuryMod = 1.0;
+          if (hasTrait(prev.skater.traits, 'steel_ankles')) injuryMod *= 0.5;
+          if (hasTrait(prev.skater.traits, 'glass_cannon')) injuryMod *= 1.5;
+          if (Math.random() < injuryMod) {
+            updatedSkater.injuryMonths = e.injuryMonths;
+          }
+        }
       }
 
       const totalAttrs = getTotalAttributes(updatedSkater.attributes!, remainingInventory);
@@ -499,6 +577,14 @@ export function useGameState() {
           aiUp.technique = aiTech;
         }
 
+        // AI programV2 maturity progression
+        if (aiUp.programV2) {
+          aiUp.programV2 = {
+            ...aiUp.programV2,
+            maturity: Math.min(90, aiUp.programV2.maturity + 2),
+          };
+        }
+
         if (prev.month === 12) {
           aiUp.pointsLast = aiUp.pointsCurrent;
           aiUp.pointsCurrent = 0;
@@ -518,9 +604,11 @@ export function useGameState() {
             tec: newTec, art: newArt,
             attributes: { jump: newAiBaseStat, spin: newAiBaseStat, step: newAiBaseStat, perf: newAiBaseStat, endurance: newAiBaseStat },
             technique: createAITechnique(newTec, newArt),
+            traits: rollAITraits('rookie'),
             sta: 100, isPlayer: false, retired: false,
             pointsLast: 0, pointsCurrent: 0, rolling: 0, titles: [], honors: [], pQual: 1, pAge: 0, injuryMonths: 0,
-            activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 }
+            activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 },
+            programV2: createDefaultProgramV2(),
           };
           return { ...newAi, rolling: calculateRolling(newAi) };
         }
@@ -592,7 +680,8 @@ export function useGameState() {
         activeEvent: triggeredEvent ? { event: triggeredEvent, narrative: generateLocalNarrative(triggeredEvent) } : null,
         market: updatedMarket, inventory: remainingInventory,
         lastGrowth: { tec: tecGain, art: artGain },
-        pendingStyleTags: pendingTags.length > 0 ? pendingTags : undefined
+        pendingStyleTags: pendingTags.length > 0 ? pendingTags : undefined,
+        playerMusic: updatedPlayerMusic,
       };
     });
     setIsProcessing(false);
@@ -648,6 +737,19 @@ export function useGameState() {
     });
   }, []);
 
+  const handleSelectTrait = useCallback((traitId: TraitId) => {
+    setGame(prev => {
+      if (!prev.pendingTraitSelection) return prev;
+      const currentTraits = prev.skater.traits || [];
+      if (currentTraits.length >= 4 || currentTraits.includes(traitId)) return prev;
+      return {
+        ...prev,
+        skater: { ...prev.skater, traits: [...currentTraits, traitId] },
+        pendingTraitSelection: undefined,
+      };
+    });
+  }, []);
+
   return {
     game, setGame,
     isNaming, setIsNaming, newName, setNewName,
@@ -665,6 +767,7 @@ export function useGameState() {
     handleStartGame, confirmResetGame, selectSponsor, handleSponsorshipModalClose,
     buyItem, nextMonth,
     handleSelectStyleTag,
+    handleSelectTrait,
     MATCH_STAMINA_COST,
   };
 }

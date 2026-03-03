@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { GameState, PlayerAttributes, JumpType, SpinType } from '../types';
+import { GameState, PlayerAttributes, JumpType, SpinType, TraitId } from '../types';
 import { getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES, JUMP_ROTATION_THRESHOLDS } from '../game/data/technique';
 import { getVariant } from '../game/data/variants';
 import { getStyleTag } from '../game/data/styleTags';
+import { getTrait } from '../game/data/traits';
 import { estimateSuccessRate } from '../game/scoring';
 import { ACTION_LIBRARY } from '../game/data/actions';
 
@@ -199,6 +200,35 @@ const TechProfile: React.FC<TechProfileProps> = ({ game, displayAttributes, onCl
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto px-10 py-6 custom-scrollbar">
+
+          {/* === TRAITS === */}
+          {game.skater.traits && game.skater.traits.length > 0 && (
+            <section className="mb-8">
+              <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.3em] mb-3">天赋特质</h3>
+              <div className="space-y-2">
+                {game.skater.traits.map((traitId: TraitId) => {
+                  const t = getTrait(traitId);
+                  if (!t) return null;
+                  return (
+                    <div key={traitId} className={`px-4 py-3 rounded-xl border ${t.isNegative ? 'bg-red-950/20 border-red-900/40' : 'bg-amber-950/20 border-amber-800/40'}`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">{t.icon}</span>
+                        <span className="text-sm font-black text-white">{t.name}</span>
+                        <span className="text-[9px] text-slate-500 italic">{t.nameEn}</span>
+                        <span className={`ml-auto text-[8px] font-black uppercase px-2 py-0.5 rounded ${t.trigger === 'passive' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}`}>
+                          {t.trigger === 'passive' ? '被动' : '条件触发'}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 pl-7">{t.description}</p>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[9px] text-slate-600 mt-2 text-center">
+                已获得 {game.skater.traits.length}/4 个特质 {game.skater.traits.length < 4 ? '· 通过里程碑赛事解锁更多' : '· 已达上限'}
+              </p>
+            </section>
+          )}
 
           {/* === JUMPS === */}
           <section className="mb-8">

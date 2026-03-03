@@ -3,6 +3,7 @@ import { ACTION_LIBRARY, MATCH_STRUCTURES, canPerformAction } from './data/actio
 import { calculateActionScore } from './scoring';
 import { createAITechnique } from './data/technique';
 import { getVariant } from './data/variants';
+import { createTraitMatchState, updateTraitMatchState, getTraitFailRateMod, getTraitPCSMod, hasTrait } from './data/traits';
 
 // Helper to find the best action a skater can perform in a phase
 export const getBestAction = (phase: MatchPhaseType, stats: PlayerAttributes, technique?: SkaterTechnique): MatchAction => {
@@ -72,7 +73,7 @@ const pickAIVariant = (action: MatchAction, technique: SkaterTechnique): string 
 export const simulateAIProgram = (skater: Skater, templateId: string): number => {
   const template = MATCH_STRUCTURES[templateId] || MATCH_STRUCTURES['low'];
 
-  const stats: PlayerAttributes = skater.attributes || {
+  const baseStats: PlayerAttributes = skater.attributes || {
     jump: skater.tec,
     spin: skater.tec,
     step: (skater.tec + skater.art) / 2,
@@ -80,18 +81,44 @@ export const simulateAIProgram = (skater: Skater, templateId: string): number =>
     endurance: skater.tec * 0.9
   };
 
+  // slow_starter: simplified for AI (30% chance treated as "SP bottom half" → attrs +5%)
+  const traits = skater.traits || [];
+  let stats = baseStats;
+  if (hasTrait(traits, 'slow_starter') && Math.random() < 0.3) {
+    stats = {
+      jump: baseStats.jump * 1.05,
+      spin: baseStats.spin * 1.05,
+      step: baseStats.step * 1.05,
+      perf: baseStats.perf * 1.05,
+      endurance: baseStats.endurance * 1.05,
+    };
+  }
+
   // Use technique if available, otherwise generate from stats
   const technique = skater.technique || createAITechnique(skater.tec, skater.art);
 
   let totalScore = 0;
   let currentSta = 100;
+  let matchState = createTraitMatchState();
+  const totalPhases = template.phases.length;
 
-  template.phases.forEach(phase => {
+  template.phases.forEach((phase, index) => {
     const bestAction = getBestAction(phase, stats, technique);
     const variant = pickAIVariant(bestAction, technique);
-    const res = calculateActionScore(bestAction, stats, currentSta, false, technique, variant);
+
+    // Trait modifiers
+    const failMod = getTraitFailRateMod(traits, matchState, bestAction);
+    const pcsMod = getTraitPCSMod(traits, matchState, index, totalPhases);
+
+    const res = calculateActionScore(bestAction, stats, currentSta, false, technique, variant, failMod, pcsMod, skater.programV2);
     totalScore += res.score;
-    currentSta -= res.cost;
+
+    // iron_stamina: reduce cost in second half
+    const costMul = (hasTrait(traits, 'iron_stamina') && index >= totalPhases / 2) ? 0.8 : 1.0;
+    currentSta -= res.cost * costMul;
+
+    // Update match state
+    matchState = updateTraitMatchState(matchState, res, bestAction, index, totalPhases);
   });
 
   return totalScore * (0.95 + Math.random() * 0.1);

@@ -1,6 +1,8 @@
 import { Sponsorship, Equipment, Coach } from '../types';
-import { SURNAME, GIVEN, EQUIP_NAMES, CHOREO_NAMES } from './data/equipment';
+import { SURNAME, GIVEN, EQUIP_NAMES } from './data/equipment';
 import { COACHES } from './data/events';
+import { pickMarketChoreographers } from './data/choreographers';
+import { generateCostumeMarket } from './data/costumes';
 
 // Sponsorship generation configs
 const tierConfig = {
@@ -146,30 +148,21 @@ export const generateMarket = (activeCoachId: string | null = null, currentMarke
   }
   
   const equipment: Equipment[] = [
-    { 
-      id: 'skate_' + Math.random().toString(36).substr(2, 9), 
-      name: EQUIP_NAMES.skate[Math.floor(Math.random() * EQUIP_NAMES.skate.length)], 
+    {
+      id: 'skate_' + Math.random().toString(36).substr(2, 9),
+      name: EQUIP_NAMES.skate[Math.floor(Math.random() * EQUIP_NAMES.skate.length)],
       type: 'skate', price: 2500, owned: false, lifespan: 12, maxLifespan: 12,
       jumpBonus: 3, spinBonus: 0, stepBonus: 1, perfBonus: 0, enduranceBonus: 2
     },
-    { 
-      id: 'blade_' + Math.random().toString(36).substr(2, 9), 
-      name: EQUIP_NAMES.blade[Math.floor(Math.random() * EQUIP_NAMES.blade.length)], 
+    {
+      id: 'blade_' + Math.random().toString(36).substr(2, 9),
+      name: EQUIP_NAMES.blade[Math.floor(Math.random() * EQUIP_NAMES.blade.length)],
       type: 'blade', price: 5500, owned: false, lifespan: 10, maxLifespan: 10,
       jumpBonus: 1, spinBonus: 3, stepBonus: 2, perfBonus: 0, enduranceBonus: 0
     },
-    { 
-      id: 'costume_' + Math.random().toString(36).substr(2, 9), 
-      name: EQUIP_NAMES.costume[Math.floor(Math.random() * EQUIP_NAMES.costume.length)], 
-      type: 'costume', price: 15000, owned: false, lifespan: 8, maxLifespan: 8,
-      jumpBonus: 0, spinBonus: 0, stepBonus: 1, perfBonus: 5, enduranceBonus: -1
-    },
   ];
 
-  const choreographers = [
-    { name: CHOREO_NAMES[Math.floor(Math.random() * CHOREO_NAMES.length)], cost: 5000, base: 45, desc: "富有情感深度的基础编排。" },
-    { name: CHOREO_NAMES[Math.floor(Math.random() * CHOREO_NAMES.length)], cost: 15000, base: 65, desc: "展现个人魅力的进阶构造。" },
-    { name: CHOREO_NAMES[Math.floor(Math.random() * CHOREO_NAMES.length)], cost: 45000, base: 90, desc: "世界级的高难度艺术杰作。" }
-  ];
-  return { coaches: newCoaches, equipment, choreographers };
+  const choreographers = pickMarketChoreographers(4);
+  const costumes = generateCostumeMarket(3);
+  return { coaches: newCoaches, equipment, choreographers, costumes };
 };
