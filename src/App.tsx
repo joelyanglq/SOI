@@ -182,7 +182,11 @@ const App: React.FC = () => {
                   ...prev.skater,
                   pointsCurrent: prev.skater.pointsCurrent + pts,
                   sta: Math.max(0, prev.skater.sta - finalStaCost),
-                  honors
+                  honors,
+                  programV2: prev.skater.programV2 ? {
+                    ...prev.skater.programV2,
+                    totalRuns: (prev.skater.programV2.totalRuns || 0) + 1,
+                  } : prev.skater.programV2,
                 },
                 money: prev.money + (gs.showMatch!.event.prize || 0) * (rank <= 3 ? (4-rank)*0.3 + 0.1 : 0),
                 fame: prev.fame + fameGained,

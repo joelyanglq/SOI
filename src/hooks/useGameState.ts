@@ -505,12 +505,14 @@ export function useGameState() {
         if (e.perf) updatedSkater.attributes!.perf = clamp(updatedSkater.attributes!.perf + e.perf, 0, 100);
         if (e.endurance) updatedSkater.attributes!.endurance = clamp(updatedSkater.attributes!.endurance + e.endurance, 0, 100);
         if (e.sta) updatedSkater.sta = clamp(updatedSkater.sta + e.sta, 0, 100);
-        // Injury with trait modifiers
+        // Injury with trait modifiers (base chance scaled by traits)
         if (e.injuryMonths && e.injuryMonths > 0) {
+          const baseInjuryProb = 0.35;
           let injuryMod = 1.0;
           if (hasTrait(prev.skater.traits, 'steel_ankles')) injuryMod *= 0.5;
           if (hasTrait(prev.skater.traits, 'glass_cannon')) injuryMod *= 1.5;
-          if (Math.random() < injuryMod) {
+          const finalInjuryProb = clamp(baseInjuryProb * injuryMod, 0, 1);
+          if (Math.random() < finalInjuryProb) {
             updatedSkater.injuryMonths = e.injuryMonths;
           }
         }
