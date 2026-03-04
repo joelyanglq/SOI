@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, PlayerAttributes, Skater, Coach } from '../types';
+import { GameState, LogEntry, LogType, GameEvent, Equipment, Sponsorship, TrainingTaskType, TrainingFocus, PlayerAttributes, Skater, Coach, JumpType, SpinType } from '../types';
 import { clamp, randNormal } from '../utils/math';
 import { STORAGE_KEY, MATCH_STAMINA_COST, OLYMPIC_BASE_YEAR } from '../game/config';
 import { RANDOM_EVENTS } from '../game/data/events';
@@ -12,16 +12,34 @@ import { generateSponsorshipOptions, generateRenewalOptions, generateMarket } fr
 import { generateLocalNarrative } from '../game/events';
 import { simulateAIProgram } from '../game/match';
 import { SURNAME, GIVEN } from '../game/data/equipment';
+import { createInitialTechnique, migrateFromAttributes, autoUnlockTechnique, autoUnlockVariants, migrateTechniqueFields, createAITechnique, getJumpKey, ALL_JUMP_TYPES, ALL_SPIN_TYPES } from '../game/data/technique';
+import { getStyleTagCandidates } from '../game/data/styleTags';
+import { PendingStyleTagSelection } from '../types';
 
 const INITIAL_SKATER: Skater = {
   id: 'player_1', name: "未命名选手", age: 14.1, tec: 40.0, art: 35.0, sta: 100.0,
   attributes: { jump: 40, spin: 40, step: 40, perf: 30, endurance: 30 },
+  technique: createInitialTechnique(),
   pointsCurrent: 0, pointsLast: 0, rolling: 0, titles: [], honors: [], pQual: 1.0, pAge: 0,
   injuryMonths: 0, isPlayer: true, retired: false,
   activeProgram: { name: "基础短节目", baseArt: 30, freshness: 100 }
 };
 
-const DEFAULT_SCHEDULE: TrainingTaskType[] = ['rest', 'rest', 'rest', 'rest', 'rest', 'rest', 'rest'];
+const DEFAULT_SCHEDULE: TrainingTaskType[] = ['jump', 'jump', 'spin', 'step', 'perf', 'endurance', 'rest'];
+
+const DEFAULT_TRAINING_FOCUS: TrainingFocus = { primaryJump: 'lutz', secondaryJump: 'flip', mode: 'balanced' };
+
+// Migrate old schedule: collapse individual jump types into unified 'jump'
+function migrateSchedule(schedule: any[]): TrainingTaskType[] {
+  return schedule.map((t: any) => {
+    // Old individual jump tasks → unified 'jump'
+    if (t === 'train_axel' || t === 'train_toeloop' || t === 'train_salchow' ||
+        t === 'train_loop' || t === 'train_flip' || t === 'train_lutz' ||
+        t === 'train_combo') return 'jump';
+    if (t === 'aura') return 'perf';
+    return t as TrainingTaskType;
+  });
+}
 
 export function useGameState() {
   const [game, setGame] = useState<GameState>(() => {
@@ -41,7 +59,25 @@ export function useGameState() {
         parsed.skater.attributes.perf = parsed.skater.attributes.aura;
         delete parsed.skater.attributes.aura;
       }
-      parsed.schedule = parsed.schedule.map((t: any) => t === 'aura' ? 'perf' : t);
+      // Migrate schedule
+      parsed.schedule = migrateSchedule(parsed.schedule);
+      // Migrate training focus
+      if (!parsed.trainingFocus) parsed.trainingFocus = { ...DEFAULT_TRAINING_FOCUS };
+      // Migrate technique
+      if (!parsed.skater.technique) {
+        parsed.skater.technique = migrateFromAttributes(parsed.skater.attributes);
+      } else {
+        parsed.skater.technique = migrateTechniqueFields(parsed.skater.technique);
+      }
+      // Migrate AI techniques
+      if (parsed.aiSkaters) {
+        parsed.aiSkaters = parsed.aiSkaters.map((ai: any) => {
+          if (ai.technique) {
+            ai.technique = migrateTechniqueFields(ai.technique);
+          }
+          return ai;
+        });
+      }
       return parsed;
     }
     const derived = calcDerivedStats(INITIAL_SKATER.attributes!);
@@ -49,6 +85,7 @@ export function useGameState() {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
+      trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -116,8 +153,8 @@ export function useGameState() {
 
   const statsPreview = useMemo(() => {
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance);
-  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes]);
+    return calculateWeeklyStats(game.schedule, game.skater.sta, currentCoach, game.skater.age, game.skater.attributes!.endurance, game.skater.technique, game.trainingFocus);
+  }, [game.schedule, game.skater.sta, game.activeCoachId, game.skater.age, game.skater.attributes, game.skater.technique, game.trainingFocus]);
 
   const displayAttributes = useMemo(() => {
     if (!game.skater.attributes) return null;
@@ -149,6 +186,7 @@ export function useGameState() {
       year: 2025, month: 7, money: 20000, fame: 0, injuryMonths: 0, hasCompeted: false,
       skater: { ...INITIAL_SKATER, tec: derived.tec, art: derived.art, rolling: calculateRolling(INITIAL_SKATER) },
       schedule: [...DEFAULT_SCHEDULE],
+      trainingFocus: { ...DEFAULT_TRAINING_FOCUS },
       aiSkaters: generateInitialAI(),
       inventory: [], activeCoachId: 'coach_1',
       history: [], activeEvent: null, activeSponsor: null,
@@ -166,9 +204,9 @@ export function useGameState() {
   };
 
   const selectSponsor = (sp: Sponsorship) => {
-    setGame(prev => ({ 
-      ...prev, 
-      activeSponsor: sp, 
+    setGame(prev => ({
+      ...prev,
+      activeSponsor: sp,
       money: prev.money + sp.signingBonus + (sp.paymentType === 'lump-sum' ? (sp.totalPay || 0) : 0)
     }));
     setSponsorOptions([]);
@@ -192,11 +230,11 @@ export function useGameState() {
       const newInv = [...prev.inventory, { ...item, owned: true }];
       const totalAttrs = getTotalAttributes(prev.skater.attributes!, newInv);
       const d = calcDerivedStats(totalAttrs);
-      return { 
-        ...prev, 
-        money: prev.money - item.price, 
+      return {
+        ...prev,
+        money: prev.money - item.price,
         inventory: newInv,
-        skater: { ...prev.skater, tec: d.tec, art: d.art } 
+        skater: { ...prev.skater, tec: d.tec, art: d.art }
       };
     });
     addLog(`购入器材: ${item.name}`, 'shop');
@@ -209,35 +247,170 @@ export function useGameState() {
     await new Promise(r => setTimeout(r, 1200));
 
     const currentCoach = game.market.coaches.find(c => c.id === game.activeCoachId) || game.market.coaches[0];
-    
+
     setGame(prev => {
       const nm = prev.month === 12 ? 1 : prev.month + 1;
       const ny = prev.month === 12 ? prev.year + 1 : prev.year;
-      
-      const { finalSta, gains, artPlanPoints } = calculateWeeklyStats(prev.schedule, prev.skater.sta, currentCoach, prev.skater.age, prev.skater.attributes!.endurance);
 
+      const { finalSta, bodyGains, techGains, goeBonusGains, artPlanPoints } = calculateWeeklyStats(
+        prev.schedule, prev.skater.sta, currentCoach, prev.skater.age,
+        prev.skater.attributes!.endurance, prev.skater.technique, prev.trainingFocus
+      );
+
+      // Apply body attribute gains
       const currentBaseAttrs = { ...prev.skater.attributes! };
       const attrKeys = Object.keys(currentBaseAttrs) as (keyof PlayerAttributes)[];
-      
+
       attrKeys.forEach(k => {
-        const rawGain = gains[k] || 0;
+        const rawGain = bodyGains[k] || 0;
         const gain = clamp(randNormal(rawGain, 0.1), 0, 3.0);
         currentBaseAttrs[k] = clamp(currentBaseAttrs[k] + gain, 0, 100);
       });
 
+      // Apply technique proficiency gains
+      let updatedTechnique = JSON.parse(JSON.stringify(prev.skater.technique || createInitialTechnique()));
+
+      // Jump proficiency gains
+      for (const [jt, gain] of Object.entries(techGains.jumps)) {
+        const jumpType = jt as JumpType;
+        const card = updatedTechnique.jumps[jumpType];
+        if (card && gain) {
+          const key = getJumpKey(jumpType, card.maxRotation);
+          const currentProf = card.proficiency[key] || 0;
+          card.proficiency[key] = clamp(currentProf + randNormal(gain as number, 0.3), 0, 100);
+        }
+      }
+
+      // Apply goeBonus gains from training
+      for (const [jt, gain] of Object.entries(goeBonusGains.jumps)) {
+        const jumpType = jt as JumpType;
+        const card = updatedTechnique.jumps[jumpType];
+        if (card && gain) {
+          card.goeBonus = clamp(card.goeBonus + (gain as number), -1.0, 1.0);
+        }
+      }
+
+      // Spin proficiency gains
+      for (const [st, gain] of Object.entries(techGains.spins)) {
+        const spinType = st as SpinType;
+        const card = updatedTechnique.spins[spinType];
+        if (card && gain) {
+          card.proficiency = clamp(card.proficiency + randNormal(gain as number, 0.3), 0, 100);
+        }
+      }
+
+      // Apply spin goeBonus gains
+      if (goeBonusGains.spins > 0) {
+        for (const st of ALL_SPIN_TYPES) {
+          const card = updatedTechnique.spins[st];
+          if (card) {
+            card.goeBonus = clamp(card.goeBonus + goeBonusGains.spins, -1.0, 1.0);
+          }
+        }
+      }
+
+      // Step proficiency gains
+      if (techGains.steps > 0) {
+        updatedTechnique.steps.proficiency = clamp(
+          updatedTechnique.steps.proficiency + randNormal(techGains.steps, 0.3), 0, 100
+        );
+      }
+
+      // Apply step goeBonus gains
+      if (goeBonusGains.steps > 0) {
+        updatedTechnique.steps.goeBonus = clamp(
+          updatedTechnique.steps.goeBonus + goeBonusGains.steps, -1.0, 1.0
+        );
+      }
+
+      // Apply combo proficiency gains
+      if (techGains.combo > 0 && updatedTechnique.comboProficiency) {
+        updatedTechnique.comboProficiency['+2T'] = clamp(
+          (updatedTechnique.comboProficiency['+2T'] || 0) + techGains.combo * 1.0, 0, 100
+        );
+        updatedTechnique.comboProficiency['+3T'] = clamp(
+          (updatedTechnique.comboProficiency['+3T'] || 0) + techGains.combo * 0.7, 0, 100
+        );
+        updatedTechnique.comboProficiency['+2Lo'] = clamp(
+          (updatedTechnique.comboProficiency['+2Lo'] || 0) + techGains.combo * 0.8, 0, 100
+        );
+      }
+
+      // Auto-unlock new rotations/levels
+      updatedTechnique = autoUnlockTechnique(updatedTechnique, currentBaseAttrs);
+      // Auto-unlock variants based on proficiency
+      updatedTechnique = autoUnlockVariants(updatedTechnique, currentBaseAttrs);
+
+      // Style tag acquisition check: at proficiency 75 (1st tag) and 90 (2nd tag)
+      const pendingTags: PendingStyleTagSelection[] = [];
+
+      for (const jt of ALL_JUMP_TYPES) {
+        const card = updatedTechnique.jumps[jt];
+        const key = getJumpKey(jt, card.maxRotation);
+        const prof = card.proficiency[key] || 0;
+        const tagCount = card.styleTags.length;
+        if ((tagCount === 0 && prof >= 75) || (tagCount === 1 && prof >= 90)) {
+          const candidates = getStyleTagCandidates('jump', prof, currentBaseAttrs, card.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'jump',
+              targetKey: jt,
+              proficiencyKey: key,
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
+
+      for (const st of ALL_SPIN_TYPES) {
+        const card = updatedTechnique.spins[st];
+        const prof = card.proficiency;
+        const tagCount = card.styleTags.length;
+        if ((tagCount === 0 && prof >= 75) || (tagCount === 1 && prof >= 90)) {
+          const candidates = getStyleTagCandidates('spin', prof, currentBaseAttrs, card.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'spin',
+              targetKey: st,
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
+
+      {
+        const stepProf = updatedTechnique.steps.proficiency;
+        const stepTagCount = updatedTechnique.steps.styleTags.length;
+        if ((stepTagCount === 0 && stepProf >= 75) || (stepTagCount === 1 && stepProf >= 90)) {
+          const candidates = getStyleTagCandidates('step', stepProf, currentBaseAttrs, updatedTechnique.steps.styleTags);
+          if (candidates.length > 0) {
+            const shuffled = candidates.sort(() => Math.random() - 0.5).slice(0, 3);
+            pendingTags.push({
+              targetType: 'step',
+              targetKey: 'steps',
+              candidates: shuffled.map(c => c.id)
+            });
+          }
+        }
+      }
+
       const updatedInventory = prev.inventory.map(item => ({ ...item, lifespan: item.lifespan - 1 }));
       const remainingInventory = updatedInventory.filter(item => item.lifespan > 0);
 
-      let updatedSkater = { ...prev.skater, 
+      let updatedSkater = {
+        ...prev.skater,
         attributes: currentBaseAttrs,
+        technique: updatedTechnique,
         sta: finalSta,
         age: prev.skater.age + 0.083,
-        activeProgram: { 
-          ...prev.skater.activeProgram, 
-          freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100) 
+        activeProgram: {
+          ...prev.skater.activeProgram,
+          freshness: clamp(prev.skater.activeProgram.freshness + (artPlanPoints * 2.0) - 5.0, 0, 100)
         }
       };
-      
+
       let sponsorIncome = 0;
       if (prev.activeSponsor) {
         sponsorIncome = prev.activeSponsor.paymentType === 'monthly' ? (prev.activeSponsor.monthlyPay || 0) : 0;
@@ -247,7 +420,7 @@ export function useGameState() {
         updatedSponsor = null;
         setTimeout(() => addLog("赞助合约已到期", 'sys'), 200);
       }
-      
+
       let triggeredEvent = null;
       if (Math.random() < 0.2) triggeredEvent = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
 
@@ -266,7 +439,7 @@ export function useGameState() {
 
       const totalAttrs = getTotalAttributes(updatedSkater.attributes!, remainingInventory);
       const derived = calcDerivedStats(totalAttrs);
-      
+
       updatedSkater.tec = derived.tec;
       updatedSkater.art = derived.art;
 
@@ -281,27 +454,70 @@ export function useGameState() {
       let workingAiSkaters = prev.aiSkaters.map(ai => {
         let aiUp = { ...ai, age: ai.age + 0.083 };
         if (aiUp.injuryMonths > 0) aiUp.injuryMonths -= 1;
-        
+
         aiUp.tec = clamp(aiUp.tec + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
         aiUp.art = clamp(aiUp.art + (aiUp.age < 23 ? 0.15 : 0.05), 0, 100);
-        
-        if (prev.month === 12) { 
-          aiUp.pointsLast = aiUp.pointsCurrent; 
-          aiUp.pointsCurrent = 0; 
+
+        // AI technique monthly progression
+        if (aiUp.technique) {
+          const techCopy = JSON.parse(JSON.stringify(aiUp.technique));
+          for (const jt of ALL_JUMP_TYPES) {
+            const card = techCopy.jumps[jt];
+            if (card) {
+              const key = getJumpKey(jt, card.maxRotation);
+              const currentProf = card.proficiency[key] || 0;
+              card.proficiency[key] = clamp(currentProf + 0.5, 0, 95);
+              // AI goeBonus growth
+              card.goeBonus = clamp((card.goeBonus || 0) + 0.005, -1.0, 1.0);
+            }
+          }
+          for (const st of ALL_SPIN_TYPES) {
+            const card = techCopy.spins[st];
+            if (card) {
+              card.proficiency = clamp(card.proficiency + 0.3, 0, 95);
+              card.goeBonus = clamp((card.goeBonus || 0) + 0.003, -1.0, 1.0);
+            }
+          }
+          techCopy.steps.proficiency = clamp(techCopy.steps.proficiency + 0.3, 0, 95);
+          techCopy.steps.goeBonus = clamp((techCopy.steps.goeBonus || 0) + 0.003, -1.0, 1.0);
+
+          // AI combo proficiency growth
+          if (techCopy.comboProficiency) {
+            techCopy.comboProficiency['+2T'] = clamp((techCopy.comboProficiency['+2T'] || 0) + 0.3, 0, 95);
+            techCopy.comboProficiency['+3T'] = clamp((techCopy.comboProficiency['+3T'] || 0) + 0.2, 0, 80);
+            techCopy.comboProficiency['+2Lo'] = clamp((techCopy.comboProficiency['+2Lo'] || 0) + 0.2, 0, 70);
+          }
+
+          // Auto-unlock for AI
+          const aiBodyAttrs = {
+            jump: aiUp.tec,
+            spin: aiUp.tec,
+            step: (aiUp.tec + aiUp.art) / 2
+          };
+          let aiTech = autoUnlockTechnique(techCopy, aiBodyAttrs);
+          aiTech = autoUnlockVariants(aiTech, aiBodyAttrs);
+          aiUp.technique = aiTech;
         }
-        
+
+        if (prev.month === 12) {
+          aiUp.pointsLast = aiUp.pointsCurrent;
+          aiUp.pointsCurrent = 0;
+        }
+
         aiUp.rolling = calculateRolling(aiUp);
 
         const shouldRetire = (aiUp.age > 33) || (aiUp.age > 28 && Math.random() < 0.05);
         if (shouldRetire) {
           const newAiBaseStat = 35 + Math.random() * 20;
-          const newAiStats = { jump: newAiBaseStat, spin: newAiBaseStat, step: newAiBaseStat, perf: newAiBaseStat, endurance: newAiBaseStat };
+          const newTec = newAiBaseStat;
+          const newArt = newAiBaseStat;
           const newAi: Skater = {
             id: `ai_${Date.now()}_${Math.random()}`,
             name: SURNAME[Math.floor(Math.random() * SURNAME.length)] + GIVEN[Math.floor(Math.random() * GIVEN.length)],
             age: 14 + Math.random() * 2,
-            tec: newAiBaseStat, art: newAiBaseStat,
-            attributes: newAiStats,
+            tec: newTec, art: newArt,
+            attributes: { jump: newAiBaseStat, spin: newAiBaseStat, step: newAiBaseStat, perf: newAiBaseStat, endurance: newAiBaseStat },
+            technique: createAITechnique(newTec, newArt),
             sta: 100, isPlayer: false, retired: false,
             pointsLast: 0, pointsCurrent: 0, rolling: 0, titles: [], honors: [], pQual: 1, pAge: 0, injuryMonths: 0,
             activeProgram: { name: "Gen Program", baseArt: 35, freshness: 100 }
@@ -312,22 +528,22 @@ export function useGameState() {
       });
 
       const currentMonthEvents = seasonCalendar[prev.month] || [];
-      const sortedEvents = [...currentMonthEvents].sort((a,b) => b.pts - a.pts);
+      const sortedEvents = [...currentMonthEvents].sort((a, b) => b.pts - a.pts);
 
       sortedEvents.forEach(ev => {
-        let candidates = workingAiSkaters.filter(ai => 
+        let candidates = workingAiSkaters.filter(ai =>
           !aiCompetedIds.has(ai.id) && ai.injuryMonths === 0
         );
 
         if (ev.req > 0) {
           candidates = candidates.filter(ai => (ai.rolling || 0) >= ev.req);
         } else {
-          const globalRanked = [...workingAiSkaters].sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+          const globalRanked = [...workingAiSkaters].sort((a, b) => (b.rolling || 0) - (a.rolling || 0));
           const eliteIds = new Set(globalRanked.slice(0, 50).map(s => s.id));
           candidates = candidates.filter(ai => !eliteIds.has(ai.id));
         }
 
-        candidates.sort((a,b) => (b.rolling || 0) - (a.rolling || 0));
+        candidates.sort((a, b) => (b.rolling || 0) - (a.rolling || 0));
         const participants = candidates.slice(0, ev.max);
         participants.forEach(p => aiCompetedIds.add(p.id));
 
@@ -336,7 +552,7 @@ export function useGameState() {
           matchScore: simulateAIProgram(ai, ev.template)
         }));
 
-        matchResults.sort((a,b) => b.matchScore - a.matchScore);
+        matchResults.sort((a, b) => b.matchScore - a.matchScore);
 
         matchResults.forEach((res, rankIdx) => {
           const rank = rankIdx + 1;
@@ -349,10 +565,10 @@ export function useGameState() {
         ai.rolling = calculateRolling(ai);
       });
 
-      const updatedHistory = [...prev.history, { 
-        month: `${prev.year}.${prev.month}`, 
-        tec: Number(updatedSkater.tec.toFixed(2)), 
-        art: Number(updatedSkater.art.toFixed(2)), 
+      const updatedHistory = [...prev.history, {
+        month: `${prev.year}.${prev.month}`,
+        tec: Number(updatedSkater.tec.toFixed(2)),
+        art: Number(updatedSkater.art.toFixed(2)),
         rank: updatedSkater.rolling || 0,
         fame: prev.fame,
         points: updatedSkater.pointsCurrent
@@ -367,15 +583,16 @@ export function useGameState() {
       const tecGain = updatedSkater.tec - prev.skater.tec;
       const artGain = updatedSkater.art - prev.skater.art;
 
-      return { 
-        ...prev, year: ny, month: nm, 
-        money: prev.money - currentCoach.salary + sponsorIncome + moneyBonus, 
-        fame: Math.max(0, prev.fame + fameBonus), 
-        skater: updatedSkater, aiSkaters: workingAiSkaters, activeSponsor: updatedSponsor, 
-        history: updatedHistory, hasCompeted: false, 
-        activeEvent: triggeredEvent ? { event: triggeredEvent, narrative: generateLocalNarrative(triggeredEvent) } : null, 
+      return {
+        ...prev, year: ny, month: nm,
+        money: prev.money - currentCoach.salary + sponsorIncome + moneyBonus,
+        fame: Math.max(0, prev.fame + fameBonus),
+        skater: updatedSkater, aiSkaters: workingAiSkaters, activeSponsor: updatedSponsor,
+        history: updatedHistory, hasCompeted: false,
+        activeEvent: triggeredEvent ? { event: triggeredEvent, narrative: generateLocalNarrative(triggeredEvent) } : null,
         market: updatedMarket, inventory: remainingInventory,
-        lastGrowth: { tec: tecGain, art: artGain }
+        lastGrowth: { tec: tecGain, art: artGain },
+        pendingStyleTags: pendingTags.length > 0 ? pendingTags : undefined
       };
     });
     setIsProcessing(false);
@@ -399,6 +616,38 @@ export function useGameState() {
     }, 100);
   };
 
+  const handleSelectStyleTag = useCallback((selectionIndex: number, tagId: string) => {
+    setGame(prev => {
+      if (!prev.pendingStyleTags || selectionIndex >= prev.pendingStyleTags.length) return prev;
+      const selection = prev.pendingStyleTags[selectionIndex];
+      const updatedTechnique = JSON.parse(JSON.stringify(prev.skater.technique));
+
+      if (selection.targetType === 'jump') {
+        const card = updatedTechnique.jumps[selection.targetKey];
+        if (card && !card.styleTags.includes(tagId)) {
+          card.styleTags.push(tagId);
+        }
+      } else if (selection.targetType === 'spin') {
+        const card = updatedTechnique.spins[selection.targetKey];
+        if (card && !card.styleTags.includes(tagId)) {
+          card.styleTags.push(tagId);
+        }
+      } else if (selection.targetType === 'step') {
+        if (!updatedTechnique.steps.styleTags.includes(tagId)) {
+          updatedTechnique.steps.styleTags.push(tagId);
+        }
+      }
+
+      const remainingTags = prev.pendingStyleTags.filter((_, i) => i !== selectionIndex);
+
+      return {
+        ...prev,
+        skater: { ...prev.skater, technique: updatedTechnique },
+        pendingStyleTags: remainingTags.length > 0 ? remainingTags : undefined
+      };
+    });
+  }, []);
+
   return {
     game, setGame,
     isNaming, setIsNaming, newName, setNewName,
@@ -415,6 +664,7 @@ export function useGameState() {
     addLog,
     handleStartGame, confirmResetGame, selectSponsor, handleSponsorshipModalClose,
     buyItem, nextMonth,
+    handleSelectStyleTag,
     MATCH_STAMINA_COST,
   };
 }

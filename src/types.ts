@@ -5,6 +5,43 @@ export interface Program {
   freshness: number; // 0 - 100
 }
 
+// --- Technique Card System ---
+export type JumpType = 'axel' | 'toeloop' | 'salchow' | 'loop' | 'flip' | 'lutz';
+
+export interface JumpCard {
+  type: JumpType;
+  maxRotation: number;           // highest learned rotation (1-4)
+  proficiency: Record<string, number>; // e.g. '3Lz': 72 (0-100)
+  goeBonus: number;              // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[];           // acquired style tag IDs
+  variants: string[];            // unlocked variant IDs (e.g. 'tano', 'rippon')
+}
+
+export type SpinType = 'upright' | 'sit' | 'camel' | 'combo' | 'flying';
+
+export interface SpinCard {
+  type: SpinType;
+  level: number;       // 1-4
+  proficiency: number; // 0-100
+  goeBonus: number;    // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[]; // acquired style tag IDs
+  variants: string[];  // unlocked variant IDs (e.g. 'biellmann', 'donut')
+}
+
+export interface StepSkill {
+  level: number;       // 1-4
+  proficiency: number; // 0-100
+  goeBonus: number;    // per-type quality modifier (-1.0 to +1.0)
+  styleTags: string[]; // acquired style tag IDs
+}
+
+export interface SkaterTechnique {
+  jumps: Record<JumpType, JumpCard>;
+  spins: Record<SpinType, SpinCard>;
+  steps: StepSkill;
+  comboProficiency: Record<string, number>; // '+2T': 80, '+3T': 45, '+2Lo': 60
+}
+
 export interface HonorRecord {
   year: number;
   month: number;
@@ -28,6 +65,7 @@ export interface Skater {
   art: number; // Calculated from attributes for player, raw for AI
   sta: number; // Global Stamina Resource
   attributes?: PlayerAttributes; // Only for player
+  technique?: SkaterTechnique; // Card-based technique system
   pointsCurrent: number;
   pointsLast: number;
   rolling?: number;
@@ -121,14 +159,27 @@ export interface RandomEvent {
   type: 'positive' | 'negative' | 'neutral';
 }
 
-export type TrainingTaskType = 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
+export type TrainingTaskType =
+  | 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
+
+export type TrainingMode = 'stability' | 'balanced' | 'refinement';
+
+export interface TrainingFocus {
+  primaryJump: JumpType;
+  secondaryJump: JumpType;
+  mode: TrainingMode;
+}
 
 export interface TrainingTaskDefinition {
   id: TrainingTaskType;
   name: string;
   color: string;
+  // Body attribute gain (for body ceiling attributes)
   targetAttr?: keyof PlayerAttributes;
-  baseGain: number;
+  bodyGain: number;
+  // Technique card gain
+  targetTech?: 'jump' | 'spin' | 'step';
+  baseGain: number;  // proficiency gain for technique cards
   staCost: number; // positive = cost, negative = gain
   desc: string;
 }
@@ -142,6 +193,7 @@ export interface GameState {
   hasCompeted: boolean;
   skater: Skater;
   schedule: TrainingTaskType[]; // Replaces old plan
+  trainingFocus: TrainingFocus; // Jump focus + training mode
   aiSkaters: Skater[];
   inventory: Equipment[];
   activeCoachId: string | null;
@@ -161,6 +213,7 @@ export interface GameState {
     choreographers: { name: string; cost: number; base: number; desc: string }[];
   };
   lastGrowth?: { tec: number; art: number };
+  pendingStyleTags?: PendingStyleTagSelection[];
 }
 
 export type LogType = 'train' | 'comp' | 'med' | 'sys' | 'shop' | 'event' | 'art';
@@ -182,7 +235,15 @@ export interface MatchAction {
   baseScore: number;
   cost: number;
   risk: number; // 0-1 base failure chance
-  reqStats: Partial<PlayerAttributes>; // Requirements to unlock
+  reqStats: Partial<PlayerAttributes>; // Legacy: body ceiling requirements
+  techReq?: {
+    jumpType?: JumpType;
+    rotation?: number;
+    spinType?: SpinType;
+    spinLevel?: number;
+    stepLevel?: number;
+    comboSuffix?: string; // '+2T' | '+3T' | '+2Lo' for combo actions
+  };
   desc: string;
 }
 
@@ -197,6 +258,7 @@ export interface MatchStructure {
 export interface ProgramElement {
   phase: MatchPhaseType;
   actionId: string;
+  variant?: string; // active variant ID for this element
 }
 
 export interface ProgramConfig {
@@ -204,3 +266,43 @@ export interface ProgramConfig {
 }
 
 export type ConfigStrategy = 'conservative' | 'balanced' | 'aggressive' | 'custom';
+
+// --- Style Tag System ---
+export interface StyleTagDef {
+  id: string;
+  name: string;
+  nameEn: string;
+  description: string;
+  goeImpact: number;        // 0.1 to 0.5
+  category: 'jump' | 'spin' | 'step' | 'general';
+  rarity: 'common' | 'rare' | 'legendary';
+  requirement?: {
+    minProficiency?: number;
+    minBodyAttr?: Partial<PlayerAttributes>;
+  };
+}
+
+// --- Variant System ---
+export interface VariantDef {
+  id: string;
+  name: string;
+  nameEn: string;
+  description: string;
+  bvMultiplier: number;      // e.g. 1.10 = +10% BV
+  riskModifier: number;      // e.g. 0.05 = +5% added risk
+  category: 'jump' | 'spin';
+  applicableTo?: SpinType[]; // for spin variants only
+  requirement: {
+    minProficiency: number;
+    minBodySpin?: number;
+    prerequisiteVariant?: string;
+  };
+}
+
+// --- Pending Style Tag Selection ---
+export interface PendingStyleTagSelection {
+  targetType: 'jump' | 'spin' | 'step';
+  targetKey: string;
+  proficiencyKey?: string;
+  candidates: string[];
+}
