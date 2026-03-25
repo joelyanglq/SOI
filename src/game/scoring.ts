@@ -1,9 +1,54 @@
-import { MatchAction, PlayerAttributes, SkaterTechnique } from '../types';
+import { MatchAction, PlayerAttributes, SkaterTechnique, ProgramV2 } from '../types';
 import { PHASE_META } from './data/actions';
 import { getJumpKey } from './data/technique';
 import { getVariant } from './data/variants';
 import { getStyleTag } from './data/styleTags';
 import { clamp } from '../utils/math';
+import { getMaturityModifier } from './program';
+
+// --- PCS (Program Component Score) Calculator ---
+export interface PCSComponents {
+  skatingSkills: number;
+  transitions: number;
+  performance: number;
+  total: number;
+  synergyMultiplier: number;
+  maturityModifier: number;
+  final: number;
+}
+
+export const calculatePCS = (
+  stats: PlayerAttributes,
+  technique?: SkaterTechnique,
+  programV2?: ProgramV2,
+  traitPCSMod?: number
+): PCSComponents => {
+  // Skating Skills = f(step attribute, step proficiency)
+  const stepProf = technique?.steps?.proficiency || 30;
+  const skatingSkills = (stats.step * 0.6 + stepProf * 0.4) / 100 * 3.0;
+
+  // Transitions = f(blueprint transition quality, maturity)
+  const transitionBase = programV2?.blueprint?.totalTransitionQuality || 0.5;
+  const transitions = transitionBase * 3.0;
+
+  // Performance = f(perf attribute, choreo impression, synergy)
+  const choreoImpression = programV2?.blueprint?.totalChoreoImpression || 0.5;
+  const performance = ((stats.perf / 100) * 0.5 + choreoImpression * 0.5) * 3.0;
+
+  const total = (skatingSkills + transitions + performance) / 3;
+
+  // Synergy multiplier
+  const synergyMultiplier = programV2?.synergy?.multiplier || 1.0;
+
+  // Maturity modifier
+  const maturity = programV2?.maturity ?? 50;
+  const maturityModifier = getMaturityModifier(maturity);
+
+  const pcsmod = traitPCSMod || 1.0;
+  const final = total * synergyMultiplier * maturityModifier * pcsmod;
+
+  return { skatingSkills, transitions, performance, total, synergyMultiplier, maturityModifier, final };
+};
 
 // ISU-Compliant Score Calculator (Base Value + GOE) - Proficiency-Based
 export const calculateActionScore = (
@@ -12,8 +57,11 @@ export const calculateActionScore = (
   currentSta: number,
   isPlayer: boolean,
   technique?: SkaterTechnique,  // for proficiency-based scoring
-  activeVariant?: string        // active variant ID for this element
-): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number, goe: number } => {
+  activeVariant?: string,       // active variant ID for this element
+  traitFailRateMod?: number,    // additive fail rate modifier from traits (negative = less fail)
+  traitPCSMod?: number,         // multiplicative PCS modifier from traits (1.0 = no change)
+  programV2?: ProgramV2         // for PCS calculation
+): { score: number, cost: number, isFail: boolean, fatigueFactor: number, raw: number, goe: number, pcs?: PCSComponents } => {
 
   // Stamina Cost (Endurance reduces cost by up to 40%)
   const end = stats.endurance || 30;
@@ -79,7 +127,8 @@ export const calculateActionScore = (
 
   // Failure Chance: proficiency-based instead of body-attr-based
   const baseFailChance = clamp(adjustedRisk * 100 * (1 - proficiency / 120), 2, 90);
-  const failChance = isPlayer ? baseFailChance : baseFailChance * 0.4;
+  const traitAdjustedFail = clamp(baseFailChance + (traitFailRateMod || 0), 2, 90);
+  const failChance = isPlayer ? traitAdjustedFail : baseFailChance * 0.4;
   const isFail = Math.random() * 100 < failChance;
 
   // --- ISU SCORING SYSTEM: BV + GOE ---
@@ -109,8 +158,9 @@ export const calculateActionScore = (
   const goeValue = baseValue * (goeGrade * 0.10);
   const elementScore = baseValue + goeValue;
 
-  // PCS-like component based on perf attribute (unchanged)
-  const pcsBonus = (stats.perf || 30) * 0.03;
+  // PCS component based on program system (with fallback for legacy)
+  const pcs = calculatePCS(stats, technique, programV2, traitPCSMod || 1.0);
+  const pcsBonus = programV2 ? pcs.final : (stats.perf || 30) * 0.03 * (traitPCSMod || 1.0);
 
   const finalScore = Math.max(0, elementScore + pcsBonus);
 
@@ -120,7 +170,8 @@ export const calculateActionScore = (
     isFail,
     fatigueFactor,
     raw: baseValue, // now includes variant BV multiplier
-    goe: goeGrade
+    goe: goeGrade,
+    pcs: programV2 ? pcs : undefined,
   };
 };
 

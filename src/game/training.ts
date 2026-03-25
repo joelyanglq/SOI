@@ -1,7 +1,8 @@
-import { TrainingTaskType, Coach, PlayerAttributes, SkaterTechnique, JumpType, SpinType, TrainingFocus } from '../types';
+import { TrainingTaskType, Coach, PlayerAttributes, SkaterTechnique, JumpType, SpinType, TrainingFocus, TraitId } from '../types';
 import { clamp } from '../utils/math';
 import { TRAINING_TASKS } from './data/training';
 import { ALL_JUMP_TYPES, ALL_SPIN_TYPES } from './data/technique';
+import { hasTrait } from './data/traits';
 
 export interface TrainingResult {
   finalSta: number;
@@ -18,6 +19,7 @@ export interface TrainingResult {
     steps: number;
   };
   artPlanPoints: number;
+  maturityGain: number;
 }
 
 // Training mode multipliers for jump training
@@ -34,7 +36,8 @@ export const calculateWeeklyStats = (
   skaterAge: number,
   currentEndurance: number,
   technique?: SkaterTechnique,
-  trainingFocus?: TrainingFocus
+  trainingFocus?: TrainingFocus,
+  traits?: TraitId[]
 ): TrainingResult => {
   let tempSta = startSta;
   const bodyGains: Record<string, number> = { jump: 0, spin: 0, step: 0, perf: 0, endurance: 0 };
@@ -50,8 +53,13 @@ export const calculateWeeklyStats = (
     steps: 0,
   };
   let artPlanPoints = 0;
+  let maturityGain = 0;
 
-  const ageMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
+  const baseAgeMod = skaterAge < 18 ? 1.3 : (skaterAge <= 23 ? 1.0 : 0.6);
+  // late_bloomer: reduce post-23 decay by 40% (0.6 → 0.84)
+  const ageMod = (skaterAge > 23 && hasTrait(traits, 'late_bloomer'))
+    ? 1.0 - (1.0 - baseAgeMod) * 0.6
+    : baseAgeMod;
   const enduranceCostReduction = currentEndurance / 200;
   const enduranceEfficiencyBonus = currentEndurance / 500;
 
@@ -117,8 +125,14 @@ export const calculateWeeklyStats = (
     }
 
     if (task.targetAttr === 'perf' || task.targetAttr === 'step') artPlanPoints += task.bodyGain;
+
+    // Rehearsal: accumulate maturity gain
+    if (taskId === 'rehearsal') {
+      maturityGain += 7 + Math.random() * 8; // 7-15 range
+    }
+
     tempSta = clamp(tempSta - adjustedStaCost, 0, 100);
   }
 
-  return { finalSta: tempSta, bodyGains, techGains, goeBonusGains, artPlanPoints };
+  return { finalSta: tempSta, bodyGains, techGains, goeBonusGains, artPlanPoints, maturityGain };
 };

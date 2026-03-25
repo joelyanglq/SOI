@@ -66,6 +66,7 @@ export interface Skater {
   sta: number; // Global Stamina Resource
   attributes?: PlayerAttributes; // Only for player
   technique?: SkaterTechnique; // Card-based technique system
+  traits?: TraitId[]; // Skater traits (max 4)
   pointsCurrent: number;
   pointsLast: number;
   rolling?: number;
@@ -78,6 +79,7 @@ export interface Skater {
   retired: boolean;
   id: string;
   activeProgram: Program;
+  programV2?: ProgramV2;
 }
 
 export interface Equipment {
@@ -160,7 +162,7 @@ export interface RandomEvent {
 }
 
 export type TrainingTaskType =
-  | 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest';
+  | 'jump' | 'spin' | 'step' | 'perf' | 'endurance' | 'rest' | 'rehearsal';
 
 export type TrainingMode = 'stability' | 'balanced' | 'refinement';
 
@@ -210,10 +212,13 @@ export interface GameState {
   market: {
     coaches: Coach[];
     equipment: Equipment[];
-    choreographers: { name: string; cost: number; base: number; desc: string }[];
+    choreographers: ChoreographerNPC[];
+    costumes?: ProgramCostume[];
   };
+  playerMusic?: Music[];
   lastGrowth?: { tec: number; art: number };
   pendingStyleTags?: PendingStyleTagSelection[];
+  pendingTraitSelection?: PendingTraitSelection;
 }
 
 export type LogType = 'train' | 'comp' | 'med' | 'sys' | 'shop' | 'event' | 'art';
@@ -305,4 +310,148 @@ export interface PendingStyleTagSelection {
   targetKey: string;
   proficiencyKey?: string;
   candidates: string[];
+}
+
+// --- Trait System ---
+export type TraitId =
+  // Passive (training/growth/constitution)
+  | 'quick_learner'
+  | 'steel_ankles'
+  | 'late_bloomer'
+  | 'glass_cannon'
+  | 'iron_stamina'
+  // Conditional (match-time)
+  | 'momentum_rider'
+  | 'iron_will'
+  | 'clutch_performer'
+  | 'quad_queen'
+  | 'spin_enchanter'
+  | 'crowd_igniter'
+  | 'slow_starter'
+  | 'pressure_cracker';
+
+export type TraitTrigger = 'passive' | 'conditional';
+export type TraitCategory = 'training' | 'growth' | 'constitution' | 'match';
+
+export interface TraitDef {
+  id: TraitId;
+  name: string;
+  nameEn: string;
+  description: string;
+  trigger: TraitTrigger;
+  category: TraitCategory;
+  isNegative?: boolean;
+  icon: string;
+}
+
+export interface TraitMatchState {
+  consecutiveClean: number;
+  lastActionFailed: boolean;
+  successfulQuads: number;
+  level4Spins: number;
+  firstHalfFails: number;
+  firstHalfComplete: boolean;
+  isTrailing: boolean;
+  trailingMargin: number;
+  isCurrentlyFirst: boolean;
+  spRankBottomHalf: boolean;
+}
+
+export interface PendingTraitSelection {
+  reason: string;
+  candidates: TraitId[];
+}
+
+// ============================================================
+// Program Creation System — Music / Choreographer / Costume / Blueprint
+// ============================================================
+
+// --- Music ---
+export type MusicMood = 'lyrical' | 'dramatic' | 'energetic' | 'melancholic' | 'ethereal';
+export type MusicStructure = 'gradual' | 'explosive' | 'cyclic' | 'narrative';
+
+export interface Music {
+  id: string;
+  name: string;
+  description: string;
+  mood: MusicMood;
+  structure: MusicStructure;
+  complexity: 1 | 2 | 3;
+  energyCurve: number[];       // 7 values (one per element slot), 0.8-1.2
+}
+
+// --- Choreographer NPC ---
+export type ChoreographerType = 'classical' | 'modern' | 'theatrical' | 'minimalist';
+export type ChoreographerTier = 'rising' | 'established' | 'master';
+
+export interface ChoreographerNPC {
+  id: string;
+  name: string;
+  quote: string;
+  type: ChoreographerType;
+  tier: ChoreographerTier;
+  preferredMoods: MusicMood[];
+  cost: number;
+  transitionQuality: number;   // 0.3-1.0
+  choreoQuality: number;       // 0.3-1.0
+  portrait: string;
+}
+
+// --- Costume (Artistic) ---
+export type CostumeTheme = 'elegant' | 'fierce' | 'ethereal' | 'classic';
+
+export interface ProgramCostume {
+  id: string;
+  name: string;
+  description: string;
+  theme: CostumeTheme;
+  moodAffinity: MusicMood[];
+  quality: 1 | 2 | 3;
+  price: number;
+}
+
+// --- Program Blueprint ---
+export interface ChoreographicSequence {
+  description: string;
+  emotionalBeat: string;
+  impressionScore: number;     // 0.3-1.0
+}
+
+export interface BlueprintTransition {
+  description: string;
+  quality: number;             // 0.3-1.0
+}
+
+export type BlueprintSegment =
+  | { type: 'choreo'; data: ChoreographicSequence }
+  | { type: 'transition'; data: BlueprintTransition }
+  | { type: 'element'; slotIndex: number; phase: MatchPhaseType; recommendation: string };
+
+export interface ProgramBlueprint {
+  id: string;
+  name: string;
+  segments: BlueprintSegment[];
+  totalTransitionQuality: number;
+  totalChoreoImpression: number;
+  choreographerId: string;
+  musicId: string;
+}
+
+// --- Synergy ---
+export interface SynergyResult {
+  stars: number;              // 0-3
+  multiplier: number;
+  details: string[];
+}
+
+// --- Enhanced Program ---
+export interface ProgramV2 {
+  name: string;
+  music: Music;
+  choreographerId: string;
+  costume: ProgramCostume;
+  blueprint: ProgramBlueprint;
+  synergy: SynergyResult;
+  maturity: number;           // 0-100
+  totalRuns: number;
 }

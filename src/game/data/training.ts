@@ -13,5 +13,8 @@ export const TRAINING_TASKS: Record<string, TrainingTaskDefinition> = {
   endurance: { id: 'endurance', name: '体能训练', color: 'bg-amber-600',  targetAttr: 'endurance', bodyGain: 0.8,                 baseGain: 0,   staCost: 18, desc: "提升耐力，降低训练/比赛体力消耗" },
 
   // Recovery
-  rest:      { id: 'rest',      name: '深度理疗', color: 'bg-slate-700',  bodyGain: 0, baseGain: 0, staCost: -28, desc: "恢复大量体力" }
+  rest:      { id: 'rest',      name: '深度理疗', color: 'bg-slate-700',  bodyGain: 0, baseGain: 0, staCost: -28, desc: "恢复大量体力" },
+
+  // Program rehearsal
+  rehearsal: { id: 'rehearsal', name: '节目合练', color: 'bg-pink-600', targetAttr: 'perf', bodyGain: 0.3, baseGain: 0, staCost: 15, desc: "排练完整节目，提升节目成熟度" }
 };

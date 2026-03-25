@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType, SkaterTechnique, MatchAction } from '../types';
+import { GameEvent, Skater, PlayerAttributes, ProgramConfig, ConfigStrategy, ProgramElement, MatchPhaseType, SkaterTechnique, MatchAction, TraitMatchState, TraitId } from '../types';
 import { MATCH_STRUCTURES, PHASE_META, ACTION_LIBRARY, generateProgramConfig, getActionFromElement, calculateConfigTotalBV, calculateConfigAvgRisk, canPerformAction } from '../game/data/actions';
-import { calculateActionScore, estimateSuccessRate } from '../game/scoring';
+import { calculateActionScore, estimateSuccessRate, PCSComponents } from '../game/scoring';
 import { simulateAIProgram } from '../game/match';
 import { generateLocalCommentary } from '../game/events';
 import { getJumpKey } from '../game/data/technique';
 import { getVariant, VARIANT_LIBRARY } from '../game/data/variants';
 import { getStyleTag } from '../game/data/styleTags';
+import { createTraitMatchState, updateTraitMatchState, getTraitFailRateMod, getTraitPCSMod, getActiveTraitDescriptions, hasTrait, getTrait } from '../game/data/traits';
 import { clamp } from '../utils/math';
+import { MOOD_LABELS, MOOD_COLORS } from '../game/data/music';
+import SynergyDisplay from './SynergyDisplay';
 
 interface MatchEngineProps {
   event: GameEvent;
@@ -24,13 +27,15 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
   const [isProcessing, setIsProcessing] = useState(false);
   const [playerMatchSta, setPlayerMatchSta] = useState(0);
   const [playerAccumulatedScore, setPlayerAccumulatedScore] = useState(0);
-  const [history, setHistory] = useState<{name: string, score: number, desc: string, phaseName: string}[]>([]);
+  const [history, setHistory] = useState<{name: string, score: number, desc: string, phaseName: string, traitEffects?: string[]}[]>([]);
+  const [finalPCS, setFinalPCS] = useState<PCSComponents | null>(null);
 
   const [programConfig, setProgramConfig] = useState<ProgramConfig>({ elements: [] });
   const [configStrategy, setConfigStrategy] = useState<ConfigStrategy>('balanced');
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [pendingQuickFinish, setPendingQuickFinish] = useState(false);
+  const [traitMatchState, setTraitMatchState] = useState<TraitMatchState>(createTraitMatchState());
 
   const matchTemplate = MATCH_STRUCTURES[event.template] || MATCH_STRUCTURES['low'];
   const phases = matchTemplate.phases;
@@ -86,19 +91,43 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     setIsProcessing(true);
     await new Promise(r => setTimeout(r, 800));
 
-    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true, skater.technique, currentElement.variant);
+    const traits = skater.traits || [];
+    const totalActions = programConfig.elements.length;
 
-    const nextSta = clamp(playerMatchSta - result.cost, 0, 100);
+    // Update clutch_performer / pressure_cracker state
+    const topAIScore = Math.max(...participants.filter((p: any) => !p.isPlayer).map((p: any) => p.score));
+    const currentMatchState: TraitMatchState = {
+      ...traitMatchState,
+      isTrailing: playerAccumulatedScore < topAIScore,
+      trailingMargin: Math.max(0, topAIScore - playerAccumulatedScore),
+      isCurrentlyFirst: playerAccumulatedScore > topAIScore,
+    };
+
+    const failMod = getTraitFailRateMod(traits, currentMatchState, action);
+    const pcsMod = getTraitPCSMod(traits, currentMatchState, phaseIndex, totalActions);
+    const traitEffects = getActiveTraitDescriptions(traits, currentMatchState, action, phaseIndex, totalActions).map(a => a.effect);
+
+    const result = calculateActionScore(action, skater.attributes!, playerMatchSta, true, skater.technique, currentElement.variant, failMod, pcsMod, skater.programV2);
+
+    // iron_stamina: reduce cost in second half
+    const costMul = (hasTrait(traits, 'iron_stamina') && phaseIndex >= totalActions / 2) ? 0.8 : 1.0;
+    const nextSta = clamp(playerMatchSta - result.cost * costMul, 0, 100);
     const finalScore = result.score;
 
     setPlayerMatchSta(nextSta);
     setPlayerAccumulatedScore(prev => prev + finalScore);
+    if (result.pcs) setFinalPCS(result.pcs);
+
+    // Update trait match state
+    const newMatchState = updateTraitMatchState(currentMatchState, result, action, phaseIndex, totalActions);
+    setTraitMatchState(newMatchState);
 
     setHistory(prev => [...prev, {
       name: action.name,
       score: finalScore,
       desc: result.isFail ? `摔倒 (GOE -5)` : `GOE ${result.goe > 0 ? '+' : ''}${result.goe.toFixed(1)}`,
-      phaseName: PHASE_META[action.type].name
+      phaseName: PHASE_META[action.type].name,
+      traitEffects: traitEffects.length > 0 ? traitEffects : undefined
     }]);
 
     if (phaseIndex < programConfig.elements.length - 1) {
@@ -115,23 +144,47 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
 
     let sta = playerMatchSta;
     let totalScore = playerAccumulatedScore;
-    const newHistory: {name: string, score: number, desc: string, phaseName: string}[] = [];
+    const newHistory: {name: string, score: number, desc: string, phaseName: string, traitEffects?: string[]}[] = [];
+    const traits = skater.traits || [];
+    const totalActions = programConfig.elements.length;
+    let matchState = { ...traitMatchState };
+    let lastPCS: PCSComponents | null = null;
+
+    const topAIScore = Math.max(...participants.filter((p: any) => !p.isPlayer).map((p: any) => p.score));
 
     for (let i = phaseIndex; i < programConfig.elements.length; i++) {
       const element = programConfig.elements[i];
       const action = getActionFromElement(element);
       if (!action) continue;
 
-      const result = calculateActionScore(action, skater.attributes!, sta, true, skater.technique, element.variant);
+      // Update trailing/leading state
+      matchState = {
+        ...matchState,
+        isTrailing: totalScore < topAIScore,
+        trailingMargin: Math.max(0, topAIScore - totalScore),
+        isCurrentlyFirst: totalScore > topAIScore,
+      };
+
+      const failMod = getTraitFailRateMod(traits, matchState, action);
+      const pcsMod = getTraitPCSMod(traits, matchState, i, totalActions);
+      const traitEffects = getActiveTraitDescriptions(traits, matchState, action, i, totalActions).map(a => a.effect);
+
+      const result = calculateActionScore(action, skater.attributes!, sta, true, skater.technique, element.variant, failMod, pcsMod, skater.programV2);
       const score = result.score;
-      sta = clamp(sta - result.cost, 0, 100);
+      if (result.pcs) lastPCS = result.pcs;
+
+      const costMul = (hasTrait(traits, 'iron_stamina') && i >= totalActions / 2) ? 0.8 : 1.0;
+      sta = clamp(sta - result.cost * costMul, 0, 100);
       totalScore += score;
+
+      matchState = updateTraitMatchState(matchState, result, action, i, totalActions);
 
       newHistory.push({
         name: action.name,
         score,
         desc: result.isFail ? `摔倒 (GOE -5)` : `GOE ${result.goe > 0 ? '+' : ''}${result.goe.toFixed(1)}`,
-        phaseName: PHASE_META[action.type].name
+        phaseName: PHASE_META[action.type].name,
+        traitEffects: traitEffects.length > 0 ? traitEffects : undefined
       });
     }
 
@@ -139,6 +192,8 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
     setPlayerAccumulatedScore(totalScore);
     setHistory(prev => [...prev, ...newHistory]);
     setPhaseIndex(programConfig.elements.length - 1);
+    setTraitMatchState(matchState);
+    if (lastPCS) setFinalPCS(lastPCS);
 
     await new Promise(r => setTimeout(r, 600));
     finishMatch(totalScore);
@@ -271,6 +326,21 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
 
               return (
                 <div className="flex-1 flex flex-col animate-in fade-in duration-300 overflow-hidden">
+                  {/* Program Info Banner */}
+                  {skater.programV2 && (
+                    <div className="flex items-center gap-3 mb-3 p-2.5 bg-slate-950 border border-slate-800 rounded-xl shrink-0">
+                      <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold text-white ${MOOD_COLORS[skater.programV2.music.mood]}`}>{MOOD_LABELS[skater.programV2.music.mood]}</span>
+                      <span className="text-xs font-bold text-white truncate">《{skater.programV2.name}》</span>
+                      <SynergyDisplay synergy={skater.programV2.synergy} size="sm" />
+                      <div className="ml-auto flex items-center gap-1.5">
+                        <span className="text-[8px] text-slate-500 font-bold">成熟度</span>
+                        <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-pink-500 rounded-full" style={{ width: `${skater.programV2.maturity}%` }}></div>
+                        </div>
+                        <span className="text-[9px] text-pink-400 font-bold">{skater.programV2.maturity.toFixed(0)}</span>
+                      </div>
+                    </div>
+                  )}
                   {/* Strategy Buttons */}
                   <div className="flex items-center gap-2 mb-3 shrink-0">
                     <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest mr-1">策略</span>
@@ -491,6 +561,28 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                   </div>
                 </div>
 
+                {/* Blueprint Narrative */}
+                {skater.programV2 && (() => {
+                  const segments = skater.programV2.blueprint.segments;
+                  const elemIdx = segments.findIndex(s => s.type === 'element' && (s as any).slotIndex === phaseIndex);
+                  if (elemIdx < 0) return null;
+                  const parts: React.ReactNode[] = [];
+                  if (elemIdx >= 2 && segments[elemIdx - 2].type === 'choreo') {
+                    const d = segments[elemIdx - 2].data as any;
+                    parts.push(<span key="c" className="text-purple-400/70">{d.description}</span>);
+                  }
+                  if (elemIdx >= 1 && segments[elemIdx - 1].type === 'transition') {
+                    const d = segments[elemIdx - 1].data as any;
+                    parts.push(<span key="t" className="text-slate-500 italic"> → {d.description}</span>);
+                  }
+                  if (parts.length === 0) return null;
+                  return (
+                    <div className="bg-slate-950/50 border border-slate-800/30 rounded-xl px-5 py-2.5 mb-4 text-[10px] leading-relaxed">
+                      {parts}
+                    </div>
+                  );
+                })()}
+
                 <div className="flex-1 flex flex-col items-center justify-center">
                   {(() => {
                     const activeElement = programConfig.elements[phaseIndex];
@@ -499,7 +591,7 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                     const currentAction = getActionFromElement(activeElement);
                     if (!currentAction) return <p className="text-red-400">动作未找到</p>;
 
-                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true, skater.technique, activeElement.variant);
+                    const preview = calculateActionScore(currentAction, skater.attributes!, playerMatchSta, true, skater.technique, activeElement.variant, undefined, undefined, skater.programV2);
                     const successRate = estimateSuccessRate(currentAction, skater.technique, activeElement.variant);
 
                     return (
@@ -570,6 +662,23 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                     <h2 className="text-9xl font-black italic text-white tracking-tighter">#{playerRank}</h2>
                   </div>
                 </div>
+                {/* PCS Breakdown */}
+                {finalPCS && (
+                  <div className="grid grid-cols-3 gap-3 max-w-lg mx-auto mb-6">
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                      <p className="text-[8px] text-slate-500 font-bold uppercase">滑行技术</p>
+                      <p className="text-xl font-mono font-black text-cyan-400">{finalPCS.skatingSkills.toFixed(2)}</p>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                      <p className="text-[8px] text-slate-500 font-bold uppercase">过渡衔接</p>
+                      <p className="text-xl font-mono font-black text-purple-400">{finalPCS.transitions.toFixed(2)}</p>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                      <p className="text-[8px] text-slate-500 font-bold uppercase">表演诠释</p>
+                      <p className="text-xl font-mono font-black text-pink-400">{finalPCS.performance.toFixed(2)}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 mb-10 text-slate-300 font-serif italic max-w-xl mx-auto shadow-2xl relative">"{commentary}"</div>
                 <button onClick={() => onClose(sorted)} className="bg-white text-slate-950 px-24 py-6 rounded-2xl font-black text-xl hover:scale-105 active:scale-95 transition-all shadow-xl uppercase tracking-tighter">确认排名</button>
               </div>
@@ -597,6 +706,15 @@ const MatchEngine: React.FC<MatchEngineProps> = ({ event, skater, aiSkaters, onC
                       <span className="font-bold text-white text-sm">{h.name}</span>
                       <span className={`text-[9px] font-bold ${isFall ? 'text-red-400' : goeValue > 3 ? 'text-emerald-400' : 'text-slate-500'}`}>{h.desc}</span>
                     </div>
+                    {h.traitEffects && h.traitEffects.length > 0 && (
+                      <div className="mt-1.5 flex gap-1 flex-wrap">
+                        {h.traitEffects.map((effect, j) => (
+                          <span key={j} className="text-[7px] px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-300 border border-amber-700/50 font-bold">
+                            {effect}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}

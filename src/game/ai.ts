@@ -3,6 +3,8 @@ import { randNormal } from '../utils/math';
 import { SURNAME, GIVEN } from './data/equipment';
 import { calculateRolling } from './ranking';
 import { createAITechnique } from './data/technique';
+import { rollAITraits } from './data/traits';
+import { createDefaultProgramV2 } from './program';
 
 export const generateInitialAI = (): Skater[] => {
   return Array.from({ length: 150 }).map((_, i) => {
@@ -29,11 +31,13 @@ export const generateInitialAI = (): Skater[] => {
       art,
       sta: 100,
       technique: createAITechnique(tec, art),
+      traits: rollAITraits(tier),
       pointsCurrent: 0,
       pointsLast: initialPoints,
       titles: [], honors: [], pQual: 1.0, pAge: 0, injuryMonths: 0,
       isPlayer: false, retired: false,
-      activeProgram: { name: "AI Program", baseArt: 35, freshness: 100 }
+      activeProgram: { name: "AI Program", baseArt: 35, freshness: 100 },
+      programV2: createDefaultProgramV2()
     };
     return { ...s, rolling: calculateRolling(s) };
   });
